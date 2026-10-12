@@ -8,10 +8,11 @@
   "customizations": {
 		"vscode": {
 			"extensions": [
-				"Anthropic.claude-code",
-				"ms-playwright.playwright",
-				"ms-azuretools.vscode-containers"
-			]
+        "Anthropic.claude-code",
+        "ms-playwright.playwright",
+        "ms-azuretools.vscode-containers",
+        "cweijan.vscode-database-client2"
+      ]
 		}
 	}
 }
