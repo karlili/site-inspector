@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import {
   chromium,
   type Browser,
@@ -34,6 +35,11 @@ export interface CaptureOptions {
   /** Rules from the crawl's robots.txt; the root page fetches its own. */
   robots?: RobotsRules
   screenshotDir?: string
+  /**
+   * Part of every file name this capture writes (`<page id>-<capture id>-<viewport>`),
+   * so recapturing a page never overwrites the files its current screenshots point at.
+   */
+  captureId?: string
   /** How long each page load may take. */
   navTimeoutMs?: number
   /** Checked between viewports; returning true throws CrawlCancelled. */
@@ -52,6 +58,7 @@ export async function capturePage({
   page: item,
   robots,
   screenshotDir = SCREENSHOT_DIR,
+  captureId = randomUUID().slice(0, 8),
   navTimeoutMs = 30_000,
   isCancelled = () => false,
 }: CaptureOptions): Promise<PageResult> {
@@ -115,7 +122,7 @@ export async function capturePage({
           result.discoveredUrls = [...targets]
         }
 
-        const shot = await captureScreenshot(page, viewport, screenshotDir, crawl.id, item.id)
+        const shot = await captureScreenshot(page, viewport, screenshotDir, crawl.id, `${item.id}-${captureId}`)
         result.screenshots.push({ viewport, ...shot })
       } finally {
         await context.close().catch(() => {})

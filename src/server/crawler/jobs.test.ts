@@ -235,7 +235,7 @@ describe('crawl job queue', () => {
     expect(jobs.claimNextPage(db, 'r')).toBeNull()
     expect(crawlRow(crawlId).status).toBe('cancelled')
     const open = pageRows(crawlId).filter((p) => p.depth > 0)
-    expect(open.every((p) => p.status === 'failed' && p.error === 'Crawl cancelled')).toBe(true)
+    expect(open.every((p) => p.status === 'cancelled' && p.error === 'Crawl cancelled')).toBe(true)
     expect(jobs.cancelCrawl(db, crawlId)).toBe(false)
   })
 
@@ -245,6 +245,142 @@ describe('crawl job queue', () => {
     expect(jobs.claimNextPage(db, 'r')!.crawl.id).toBe(first)
     // The first crawl is blocked on its root, so a free slot moves on to the next one.
     expect(jobs.claimNextPage(db, 'r')!.crawl.id).toBe(second)
+  })
+})
+
+const pageAt = (crawlId: string, path: string) => pageRows(crawlId).find((p) => p.url === url(path))!
+const linkPairs = (crawlId: string) => {
+  const byId = new Map(pageRows(crawlId).map((p) => [p.id, new URL(p.url).pathname]))
+  return db
+    .select()
+    .from(links)
+    .where(eq(links.crawlId, crawlId))
+    .all()
+    .map((l) => `${byId.get(l.fromPageId)}>${byId.get(l.toPageId)}`)
+    .sort()
+}
+
+/** Claim and complete pages until none are left; `linksOf` gives what each page links to. */
+function drain(linksOf: Record<string, string[]> = {}) {
+  const captured: string[] = []
+  let job
+  while ((job = jobs.claimNextPage(db, 'r'))) {
+    const p = new URL(job.page.url).pathname
+    captured.push(p)
+    expect(jobs.completePage(db, 'r', job, result((linksOf[p] ?? []).map(url)))).toBe(true)
+  }
+  return captured
+}
+
+describe('refetch, go deeper and resume', () => {
+  it('refetches a page of a finished crawl, replacing its links', () => {
+    const crawlId = newCrawl({ maxDepth: 1 })
+    finishRoot('r', [url('/a'), url('/b')])
+    drain()
+    expect(crawlRow(crawlId).status).toBe('done')
+    const root = pageAt(crawlId, '/')
+
+    expect(jobs.refetchPage(db, crawlId, root.id)).toBe(true)
+    expect(crawlRow(crawlId)).toMatchObject({ status: 'queued', finishedAt: null })
+    expect(pageAt(crawlId, '/')).toMatchObject({ status: 'pending', attempts: 0 })
+    // Already waiting for a runner.
+    expect(jobs.refetchPage(db, crawlId, root.id)).toBe(false)
+
+    expect(drain({ '/': ['/a', '/c'] })).toEqual(['/', '/c'])
+    expect(crawlRow(crawlId).status).toBe('done')
+    expect(linkPairs(crawlId)).toEqual(['/>/a', '/>/c'])
+    // The page it no longer links to stays on the board.
+    expect(pageAt(crawlId, '/b').status).toBe('done')
+  })
+
+  it('keeps the links of pages at the depth limit without crawling them', () => {
+    const crawlId = newCrawl({ maxDepth: 1 })
+    finishRoot('r', [url('/a')])
+    drain({ '/a': ['/x', '/y'] })
+    expect(pageAt(crawlId, '/a').outlinks).toEqual([url('/x'), url('/y')])
+    expect(pageRows(crawlId)).toHaveLength(2)
+  })
+
+  it('goes deeper below a page from the links it already found', () => {
+    const crawlId = newCrawl({ maxDepth: 1 })
+    finishRoot('r', [url('/a'), url('/b')])
+    drain({ '/a': ['/x'], '/b': ['/x', '/y'] })
+    const a = pageAt(crawlId, '/a')
+
+    expect(jobs.expandPage(db, crawlId, a.id, 2)).toEqual({ queued: 1 })
+    expect(crawlRow(crawlId)).toMatchObject({ status: 'queued', maxDepth: 1 })
+    expect(pageAt(crawlId, '/x')).toMatchObject({ depth: 2, parentPageId: a.id, expandToDepth: 3 })
+    // /b linked to /x before it existed; that link is filled in too.
+    expect(linkPairs(crawlId)).toContain('/b>/x')
+
+    // Two levels: /x's links are crawled, theirs are not.
+    expect(drain({ '/x': ['/z'], '/z': ['/w'] })).toEqual(['/x', '/z'])
+    expect(pageAt(crawlId, '/z').depth).toBe(3)
+    expect(pageRows(crawlId).some((p) => p.url === url('/w'))).toBe(false)
+    // /b's branch wasn't expanded.
+    expect(pageRows(crawlId).some((p) => p.url === url('/y'))).toBe(false)
+    expect(crawlRow(crawlId).status).toBe('done')
+  })
+
+  it('goes deeper across the whole crawl from the root page', () => {
+    const crawlId = newCrawl({ maxDepth: 1 })
+    finishRoot('r', [url('/a'), url('/b')])
+    drain({ '/a': ['/x'], '/b': ['/y'] })
+
+    expect(jobs.expandPage(db, crawlId, pageAt(crawlId, '/').id, 1)).toEqual({ queued: 2 })
+    expect(crawlRow(crawlId).maxDepth).toBe(2)
+    expect(drain().sort()).toEqual(['/x', '/y'])
+  })
+
+  it('ignores the page limit when going deeper', () => {
+    const crawlId = newCrawl({ maxDepth: 1, maxPages: 2 })
+    finishRoot('r', [url('/a'), url('/b')])
+    drain({ '/a': ['/x', '/y', '/z'] })
+    expect(pageRows(crawlId)).toHaveLength(2)
+
+    expect(jobs.expandPage(db, crawlId, pageAt(crawlId, '/a').id, 1)).toEqual({ queued: 3 })
+    expect(crawlRow(crawlId).pageCount).toBe(5)
+  })
+
+  it('recaptures pages whose links were never kept before going deeper', () => {
+    const crawlId = newCrawl({ maxDepth: 1 })
+    finishRoot('r', [url('/a')])
+    drain()
+    const a = pageAt(crawlId, '/a')
+    db.update(pages).set({ outlinks: null }).where(eq(pages.id, a.id)).run()
+
+    expect(jobs.expandPage(db, crawlId, a.id, 1)).toEqual({ queued: 1 })
+    expect(pageAt(crawlId, '/a').status).toBe('pending')
+    expect(drain({ '/a': ['/x'] })).toEqual(['/a', '/x'])
+  })
+
+  it('resumes a stopped crawl where it left off', () => {
+    const crawlId = newCrawl({ maxDepth: 2 })
+    finishRoot('r', [url('/a'), url('/b')])
+    const a = jobs.claimNextPage(db, 'r')!
+    jobs.completePage(db, 'r', a, result([url('/c')]))
+    expect(jobs.cancelCrawl(db, crawlId)).toBe(true)
+    expect(pageAt(crawlId, '/b').status).toBe('cancelled')
+    expect(pageAt(crawlId, '/c').status).toBe('cancelled')
+
+    expect(jobs.resumeCrawl(db, crawlId)).toBe(2)
+    expect(crawlRow(crawlId).status).toBe('queued')
+    expect(jobs.resumeCrawl(db, crawlId)).toBe(0)
+    // Only what Stop interrupted is captured, and the crawl carries on from there.
+    expect(drain({ '/b': ['/d'] })).toEqual(['/b', '/c', '/d'])
+    expect(crawlRow(crawlId).status).toBe('done')
+  })
+
+  it('resumes a crawl whose start page failed by retrying it', () => {
+    const crawlId = newCrawl()
+    const root = jobs.claimNextPage(db, 'r')!
+    jobs.completePage(db, 'r', root, result([], 'net::ERR_CONNECTION_REFUSED'))
+    expect(crawlRow(crawlId).status).toBe('failed')
+
+    expect(jobs.resumeCrawl(db, crawlId)).toBe(1)
+    expect(crawlRow(crawlId)).toMatchObject({ status: 'queued', error: null })
+    expect(drain({ '/': ['/a'] })).toEqual(['/', '/a'])
+    expect(crawlRow(crawlId).status).toBe('done')
   })
 })
 

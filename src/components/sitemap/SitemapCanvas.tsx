@@ -11,14 +11,10 @@ import {
   type Edge,
   type Node,
   type NodeChange,
-  type OnNodeDrag,
   type Rect,
 } from '@xyflow/react'
-import { useMutation } from '@tanstack/react-query'
-import { toast } from 'sonner'
 import type { CrawlDetail } from '#/lib/queries'
 import { cn } from '#/lib/utils'
-import { saveNodePositions } from '#/server/functions/crawls'
 import { sectionBounds } from './layout'
 import { BoardActionsContext, PageNode, type PageNodeType } from './PageNode'
 import { SectionNode, type SectionNodeType } from './SectionNode'
@@ -42,7 +38,7 @@ interface Props {
   detail: CrawlDetail
   board: BoardModel
   showLinks: boolean
-  /** Bumped by the parent to discard local positions and re-run the auto layout. */
+  /** Bumped by the parent when it re-runs the auto layout. */
   layoutVersion: number
   selectedPageId: string | null
   /** The page shown in the preview panel; its frame is outlined. */
@@ -67,10 +63,8 @@ export function SitemapCanvas({
   onSelectPage,
   onOpenPage,
 }: Props) {
-  const { crawl, links } = detail
+  const { links } = detail
   const [frames, setFrames, onFramesChange] = useNodesState<PageNodeType>([])
-  // Positions the user dragged this session; they win over the auto layout.
-  const localPositions = useRef(new Map<string, { x: number; y: number }>())
   // Keep the whole board in view as pages stream in, until the user pans or zooms.
   const userMovedViewport = useRef(false)
   // What the board last zoomed to, kept centred while the side panels resize it.
@@ -78,7 +72,6 @@ export function SitemapCanvas({
   const { fitView } = useReactFlow()
 
   useEffect(() => {
-    localPositions.current.clear()
     userMovedViewport.current = false
     lastFocus.current = null
   }, [layoutVersion])
@@ -95,11 +88,10 @@ export function SitemapCanvas({
       board.order.map((id) => {
         const frame = board.frames.get(id)!
         const { page } = frame
-        const stored = page.posX != null && page.posY != null ? { x: page.posX, y: page.posY } : null
         return {
           id,
           type: 'page',
-          position: localPositions.current.get(id) ?? stored ?? board.positions.get(id)!,
+          position: board.positions.get(id)!,
           // Sizes are known up front; setting `measured` too lets fitView run without
           // waiting for React Flow to measure frames that aren't rendered.
           width: frame.width,
@@ -267,26 +259,6 @@ export function SitemapCanvas({
     })
   }, [frames, links, showLinks, selectedPageId])
 
-  const save = useMutation({
-    mutationFn: saveNodePositions,
-    onError: (err) => toast.error(`Couldn't save layout: ${err.message}`),
-  })
-
-  const onNodeDragStop: OnNodeDrag<Node> = useCallback(
-    (_event, _node, dragged) => {
-      const moved = dragged.filter((n) => n.type === 'page')
-      if (!moved.length) return
-      for (const n of moved) localPositions.current.set(n.id, n.position)
-      save.mutate({
-        data: {
-          crawlId: crawl.id,
-          positions: moved.map((n) => ({ pageId: n.id, x: n.position.x, y: n.position.y })),
-        },
-      })
-    },
-    [crawl.id, save],
-  )
-
   const actions = useMemo(
     () => ({ openPage: onOpenPage, focusSection: (sectionId: string) => focus({ sectionId }) }),
     [onOpenPage, focus],
@@ -300,7 +272,6 @@ export function SitemapCanvas({
         edges={edges}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
-        onNodeDragStop={onNodeDragStop}
         onNodeClick={(_e, node) => onSelectPage(node.type === 'page' ? node.id : null)}
         onNodeDoubleClick={(_e, node) => node.type === 'page' && onOpenPage(node.id)}
         onPaneClick={() => onSelectPage(null)}
@@ -311,6 +282,8 @@ export function SitemapCanvas({
             lastFocus.current = null
           }
         }}
+        // Frames are read-only snapshots: they can be clicked and opened, never moved.
+        nodesDraggable={false}
         // Selection is owned by the parent (it's shared with the page list).
         elementsSelectable={false}
         nodesConnectable={false}

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { and, count, eq, gt, inArray, lt, sql } from 'drizzle-orm'
+import { and, count, eq, gt, inArray, lt, notInArray, or, sql } from 'drizzle-orm'
 import type { CrawlInput, RunnerSettings } from '#/lib/schemas'
 import type { ViewportId } from '#/lib/viewports'
 import type { Db } from '../db/client'
@@ -23,9 +23,22 @@ export const MAX_ATTEMPTS = 3
 export const MAX_CRAWL_DELAY_MS = 60_000
 /** Runners not heard from in this long are considered offline. */
 export const RUNNER_OFFLINE_MS = 30_000
+/**
+ * Pages a crawl may never grow past, even through "go deeper" (which otherwise
+ * ignores the crawl's own page limit). The board saves at most this many positions.
+ */
+export const MAX_PAGES_HARD = 5000
 
 const ACTIVE_CRAWL = ['queued', 'running'] as const
 const OPEN_PAGE = ['pending', 'running'] as const
+/** Puts a page back in the queue as if it had never been claimed. */
+const REQUEUED = {
+  status: 'pending',
+  error: null,
+  attempts: 0,
+  claimedBy: null,
+  leaseExpiresAt: null,
+} as const
 
 export interface ClaimedJob {
   page: Page
@@ -149,6 +162,8 @@ export function completePage(
   const { page, crawl } = job
   return db.transaction(
     (tx) => {
+      const urls = [...new Set(result.discoveredUrls)]
+      // Returns the row as it is now: "go deeper" may have changed its depth limit meanwhile.
       const owned = tx
         .update(pages)
         .set({
@@ -157,11 +172,12 @@ export function completePage(
           title: result.title,
           error: result.error,
           leaseExpiresAt: null,
+          outlinks: urls,
         })
         .where(
           and(eq(pages.id, page.id), eq(pages.claimedBy, runnerId), eq(pages.status, 'running')),
         )
-        .returning({ id: pages.id })
+        .returning()
         .get()
       if (!owned) return false
 
@@ -186,50 +202,9 @@ export function completePage(
           .run()
       }
 
-      const urls = [...new Set(result.discoveredUrls)]
-      if (page.depth < crawl.maxDepth && urls.length > 0) {
-        let room =
-          crawl.maxPages -
-          tx.select({ n: count() }).from(pages).where(eq(pages.crawlId, crawl.id)).get()!.n
-        for (const url of urls) {
-          if (room <= 0) break
-          const inserted = tx
-            .insert(pages)
-            .values({
-              id: randomUUID(),
-              crawlId: crawl.id,
-              url,
-              depth: page.depth + 1,
-              parentPageId: page.id,
-            })
-            .onConflictDoNothing()
-            .returning({ id: pages.id })
-            .get()
-          if (inserted) room--
-        }
-        tx.update(crawls)
-          .set({
-            pageCount: sql`(select count(*) from ${pages} where ${pages.crawlId} = ${crawl.id})`,
-          })
-          .where(eq(crawls.id, crawl.id))
-          .run()
-      }
-
-      // Every page that will ever link-target from here already exists: shallower
-      // levels are finished and this page just added its own children.
-      for (let i = 0; i < urls.length; i += 500) {
-        const targets = tx
-          .select({ id: pages.id })
-          .from(pages)
-          .where(and(eq(pages.crawlId, crawl.id), inArray(pages.url, urls.slice(i, i + 500))))
-          .all()
-          .filter((t) => t.id !== page.id)
-        if (targets.length === 0) continue
-        tx.insert(links)
-          .values(targets.map((t) => ({ crawlId: crawl.id, fromPageId: page.id, toPageId: t.id })))
-          .onConflictDoNothing()
-          .run()
-      }
+      // A refetched page replaces the links it had before.
+      tx.delete(links).where(and(eq(links.crawlId, crawl.id), eq(links.fromPageId, page.id))).run()
+      addOutlinks(tx, crawl.id, owned, urls)
 
       settleCrawl(tx, crawl.id)
       return true
@@ -312,10 +287,142 @@ export function cancelCrawl(db: Db, crawlId: string): boolean {
         .get()
       if (!cancelled) return false
       tx.update(pages)
-        .set({ status: 'failed', error: 'Crawl cancelled', leaseExpiresAt: null })
+        .set({ status: 'cancelled', error: 'Crawl cancelled', leaseExpiresAt: null })
         .where(and(eq(pages.crawlId, crawlId), inArray(pages.status, OPEN_PAGE)))
         .run()
       return true
+    },
+    { behavior: 'immediate' },
+  )
+}
+
+/**
+ * Capture a page again (and rediscover its links), reopening its crawl if it
+ * had finished. Its old screenshots stay until the new ones replace them.
+ * Returns false if the page is already waiting or being captured.
+ */
+export function refetchPage(db: Db, crawlId: string, pageId: string): boolean {
+  return db.transaction(
+    (tx) => {
+      const requeued = tx
+        .update(pages)
+        .set(REQUEUED)
+        .where(
+          and(eq(pages.id, pageId), eq(pages.crawlId, crawlId), notInArray(pages.status, [...OPEN_PAGE])),
+        )
+        .returning({ id: pages.id })
+        .get()
+      if (!requeued) return false
+      reopenCrawl(tx, crawlId)
+      return true
+    },
+    { behavior: 'immediate' },
+  )
+}
+
+/**
+ * Crawl `levels` more levels below a page: everything filed under it (its
+ * branch of the parent tree) may now go that much deeper than it could before.
+ * Expanding the root page extends the whole crawl. Captured pages enqueue the
+ * links they already found; pages captured before links were kept are
+ * captured again. Expansions aren't held to the crawl's page limit.
+ * Returns how many pages were queued, or null if the page doesn't exist.
+ */
+export function expandPage(
+  db: Db,
+  crawlId: string,
+  pageId: string,
+  levels: number,
+): { queued: number } | null {
+  return db.transaction(
+    (tx) => {
+      const crawl = tx.select().from(crawls).where(eq(crawls.id, crawlId)).get()
+      const page = tx
+        .select()
+        .from(pages)
+        .where(and(eq(pages.id, pageId), eq(pages.crawlId, crawlId)))
+        .get()
+      if (!crawl || !page) return null
+      const target = (page.expandToDepth ?? crawl.maxDepth) + levels
+
+      const branch = tx
+        .all<{ id: string }>(sql`
+          with recursive branch(id) as (
+            select ${pageId}
+            union
+            select p.id from ${pages} p join branch b on p.parent_page_id = b.id
+            where p.crawl_id = ${crawlId}
+          )
+          select id from branch`)
+        .map((r) => r.id)
+      for (let i = 0; i < branch.length; i += 500) {
+        tx.update(pages)
+          .set({
+            expandToDepth: sql`max(coalesce(${pages.expandToDepth}, ${crawl.maxDepth}), ${target})`,
+          })
+          .where(inArray(pages.id, branch.slice(i, i + 500)))
+          .run()
+      }
+      if (page.depth === 0 && target > crawl.maxDepth) {
+        tx.update(crawls).set({ maxDepth: target }).where(eq(crawls.id, crawlId)).run()
+      }
+
+      // Pages still waiting or being captured pick up the new limit when they finish.
+      let queued = 0
+      for (let i = 0; i < branch.length; i += 500) {
+        const frontier = tx
+          .select()
+          .from(pages)
+          .where(
+            and(
+              inArray(pages.id, branch.slice(i, i + 500)),
+              eq(pages.status, 'done'),
+              lt(pages.depth, target),
+            ),
+          )
+          .all()
+        for (const from of frontier) {
+          if (from.outlinks) {
+            queued += addOutlinks(tx, crawlId, from, from.outlinks)
+          } else {
+            tx.update(pages).set(REQUEUED).where(eq(pages.id, from.id)).run()
+            queued++
+          }
+        }
+      }
+      if (queued > 0) reopenCrawl(tx, crawlId)
+      return { queued }
+    },
+    { behavior: 'immediate' },
+  )
+}
+
+/**
+ * Carry on a stopped crawl: requeue the pages Stop (or an aborted crawl)
+ * interrupted, and the root page if it failed. Pages already captured are
+ * kept. Returns how many pages were queued.
+ */
+export function resumeCrawl(db: Db, crawlId: string): number {
+  return db.transaction(
+    (tx) => {
+      const crawl = tx.select().from(crawls).where(eq(crawls.id, crawlId)).get()
+      if (!crawl || (ACTIVE_CRAWL as readonly string[]).includes(crawl.status)) return 0
+      const resumed = tx
+        .update(pages)
+        .set(REQUEUED)
+        .where(
+          and(
+            eq(pages.crawlId, crawlId),
+            or(
+              eq(pages.status, 'cancelled'),
+              and(eq(pages.depth, 0), eq(pages.status, 'failed')),
+            ),
+          ),
+        )
+        .returning({ id: pages.id })
+        .all()
+      if (resumed.length > 0) reopenCrawl(tx, crawlId)
+      return resumed.length
     },
     { behavior: 'immediate' },
   )
@@ -364,6 +471,88 @@ export function listOnlineRunners(db: Db, now = Date.now()) {
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0]
 
+/**
+ * Enqueue the pages `from` links to, if its branch may go deeper, and record
+ * its links to every page of the crawl it points at. Returns how many pages
+ * were added.
+ */
+function addOutlinks(
+  tx: Tx,
+  crawlId: string,
+  from: Pick<Page, 'id' | 'depth' | 'expandToDepth'>,
+  urls: string[],
+): number {
+  const crawl = tx.select().from(crawls).where(eq(crawls.id, crawlId)).get()!
+  const added: string[] = []
+  if (from.depth < (from.expandToDepth ?? crawl.maxDepth) && urls.length > 0) {
+    const limit = from.expandToDepth == null ? Math.min(crawl.maxPages, MAX_PAGES_HARD) : MAX_PAGES_HARD
+    let room =
+      limit - tx.select({ n: count() }).from(pages).where(eq(pages.crawlId, crawlId)).get()!.n
+    for (const url of urls) {
+      if (room <= 0) break
+      const inserted = tx
+        .insert(pages)
+        .values({
+          id: randomUUID(),
+          crawlId,
+          url,
+          depth: from.depth + 1,
+          parentPageId: from.id,
+          expandToDepth: from.expandToDepth,
+        })
+        .onConflictDoNothing()
+        .returning({ id: pages.id })
+        .get()
+      if (inserted) {
+        added.push(inserted.id)
+        room--
+      }
+    }
+    tx.update(crawls)
+      .set({ pageCount: sql`(select count(*) from ${pages} where ${pages.crawlId} = ${crawlId})` })
+      .where(eq(crawls.id, crawlId))
+      .run()
+  }
+
+  for (let i = 0; i < urls.length; i += 500) {
+    const targets = tx
+      .select({ id: pages.id })
+      .from(pages)
+      .where(and(eq(pages.crawlId, crawlId), inArray(pages.url, urls.slice(i, i + 500))))
+      .all()
+      .filter((t) => t.id !== from.id)
+    if (targets.length === 0) continue
+    tx.insert(links)
+      .values(targets.map((t) => ({ crawlId, fromPageId: from.id, toPageId: t.id })))
+      .onConflictDoNothing()
+      .run()
+  }
+
+  // Level by level, every page linking to a new one is captured after it exists.
+  // Going deeper adds pages that earlier captures already linked to; link those too.
+  if (from.expandToDepth != null) {
+    for (let i = 0; i < added.length; i += 500) {
+      tx.run(sql`
+        insert into ${links} (crawl_id, from_page_id, to_page_id)
+        select ${crawlId}, p.id, n.id
+        from ${pages} p, json_each(p.outlinks) j
+        join ${pages} n on n.crawl_id = ${crawlId} and n.url = j.value
+        where p.crawl_id = ${crawlId} and p.outlinks is not null and p.id != n.id
+          and n.id in (${sql.join(added.slice(i, i + 500).map((id) => sql`${id}`), sql`, `)})
+        on conflict do nothing`)
+    }
+  }
+  return added.length
+}
+
+/** Put a finished crawl back in the queue; settleCrawl finishes it again once nothing is open. */
+function reopenCrawl(tx: Tx, crawlId: string) {
+  tx.update(crawls)
+    .set({ status: 'queued', error: null, finishedAt: null })
+    .where(and(eq(crawls.id, crawlId), notInArray(crawls.status, [...ACTIVE_CRAWL])))
+    .run()
+}
+
 /** Finish the crawl once nothing is left to do, or fail it if its root page failed. */
 function settleCrawl(tx: Tx, crawlId: string) {
   const crawl = tx.select().from(crawls).where(eq(crawls.id, crawlId)).get()
@@ -380,7 +569,7 @@ function settleCrawl(tx: Tx, crawlId: string) {
       .where(eq(crawls.id, crawlId))
       .run()
     tx.update(pages)
-      .set({ status: 'failed', error: 'Crawl aborted', leaseExpiresAt: null })
+      .set({ status: 'cancelled', error: 'Crawl aborted', leaseExpiresAt: null })
       .where(and(eq(pages.crawlId, crawlId), inArray(pages.status, OPEN_PAGE)))
       .run()
     return

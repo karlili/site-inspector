@@ -4,6 +4,7 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
   CircleAlert,
+  CirclePause,
   CornerDownRight,
   Loader2,
   Search,
@@ -300,6 +301,9 @@ export function LayersPanel({
                 )}
                 {page.status === 'failed' && (
                   <CircleAlert className="text-destructive-foreground mt-[3px] size-3.5 shrink-0" aria-label="Failed" />
+                )}
+                {page.status === 'cancelled' && (
+                  <CirclePause className="text-muted-foreground mt-[3px] size-3.5 shrink-0" aria-label="Not captured" />
                 )}
                 {page.httpStatus != null && page.httpStatus >= 400 && (
                   <span className="bg-destructive mt-0.5 shrink-0 px-1 text-[10px] text-white">{page.httpStatus}</span>

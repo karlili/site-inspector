@@ -1,6 +1,6 @@
 import { Fragment, createContext, memo, useContext } from 'react'
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
-import { ImageOff, Loader2, Maximize2 } from 'lucide-react'
+import { CirclePause, ImageOff, Loader2, Maximize2 } from 'lucide-react'
 import { cn } from '#/lib/utils'
 import { isPageOpen, type PageStatus } from '#/lib/schemas'
 
@@ -60,6 +60,10 @@ export const PageNode = memo(function PageNode({ id, data, selected }: NodeProps
       >
         <span className="shrink-0 font-medium tabular-nums">{data.number}</span>
         <FramePath path={data.path} />
+        {/* A page being refetched keeps its old preview; show it's on its way. */}
+        {data.preview && isPageOpen(data.status) && (
+          <Loader2 className="size-3 shrink-0 animate-spin" aria-label="Capturing" />
+        )}
         {badStatus && <span className="bg-destructive shrink-0 px-1 text-[10px] text-white">{data.httpStatus}</span>}
         <button
           type="button"
@@ -111,7 +115,7 @@ export const PageNode = memo(function PageNode({ id, data, selected }: NodeProps
               <Loader2 className="size-5 animate-spin" />
             ) : (
               <>
-                <ImageOff className="size-5" />
+                {data.status === 'cancelled' ? <CirclePause className="size-5" /> : <ImageOff className="size-5" />}
                 <span className="line-clamp-3">{data.error ?? 'No screenshot'}</span>
               </>
             )}

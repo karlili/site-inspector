@@ -18,17 +18,10 @@ export type CrawlInput = z.infer<typeof crawlInputSchema>
 
 export const crawlIdSchema = z.object({ crawlId: z.string().min(1) })
 
-export const nodePositionsSchema = z.object({
-  crawlId: z.string().min(1),
-  positions: z
-    .array(
-      z.object({
-        pageId: z.string().min(1),
-        x: z.number().finite(),
-        y: z.number().finite(),
-      }),
-    )
-    .max(5000),
+export const pageRefSchema = z.object({ crawlId: z.string().min(1), pageId: z.string().min(1) })
+
+export const expandPageSchema = pageRefSchema.extend({
+  levels: z.int().min(1).max(MAX_DEPTH),
 })
 
 /** How runners behave; edited on the settings page and read by every runner live. */
@@ -49,7 +42,8 @@ export const DEFAULT_RUNNER_SETTINGS = runnerSettingsSchema.parse({})
 export const crawlStatuses = ['queued', 'running', 'done', 'failed', 'cancelled'] as const
 export type CrawlStatus = (typeof crawlStatuses)[number]
 
-export const pageStatuses = ['pending', 'running', 'done', 'failed'] as const
+/** `cancelled`: interrupted by Stop or an aborted crawl; Resume picks it up again. */
+export const pageStatuses = ['pending', 'running', 'done', 'failed', 'cancelled'] as const
 export type PageStatus = (typeof pageStatuses)[number]
 
 /** Waiting for a runner, or being captured by one. */

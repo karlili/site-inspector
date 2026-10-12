@@ -2,10 +2,22 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createServerFn } from '@tanstack/react-start'
 import { asc, desc, eq, sql } from 'drizzle-orm'
-import { crawlIdSchema, crawlInputSchema, nodePositionsSchema } from '#/lib/schemas'
+import {
+  crawlIdSchema,
+  crawlInputSchema,
+  expandPageSchema,
+  pageRefSchema,
+} from '#/lib/schemas'
 import { db } from '../db/client'
 import { crawls, links, pages, screenshots } from '../db/schema'
-import { cancelCrawl as cancelCrawlJobs, createCrawl, listOnlineRunners } from '../crawler/jobs'
+import {
+  cancelCrawl as cancelCrawlJobs,
+  createCrawl,
+  expandPage as expandPageJobs,
+  listOnlineRunners,
+  refetchPage as refetchPageJobs,
+  resumeCrawl as resumeCrawlJobs,
+} from '../crawler/jobs'
 import { normalizeUrl } from '../crawler/url'
 import { SCREENSHOT_DIR } from '../paths'
 
@@ -51,31 +63,30 @@ export const getCrawl = createServerFn({ method: 'GET' })
     }
   })
 
-export const saveNodePositions = createServerFn({ method: 'POST' })
-  .validator(nodePositionsSchema)
-  .handler(async ({ data }) => {
-    db.transaction((tx) => {
-      for (const { pageId, x, y } of data.positions) {
-        tx.update(pages)
-          .set({ posX: x, posY: y })
-          .where(sql`${pages.id} = ${pageId} and ${pages.crawlId} = ${data.crawlId}`)
-          .run()
-      }
-    })
-    return { ok: true }
-  })
-
-export const resetNodePositions = createServerFn({ method: 'POST' })
-  .validator(crawlIdSchema)
-  .handler(async ({ data }) => {
-    db.update(pages).set({ posX: null, posY: null }).where(eq(pages.crawlId, data.crawlId)).run()
-    return { ok: true }
-  })
-
 export const cancelCrawl = createServerFn({ method: 'POST' })
   .validator(crawlIdSchema)
   .handler(async ({ data }) => {
     return { cancelled: cancelCrawlJobs(db, data.crawlId) }
+  })
+
+export const resumeCrawl = createServerFn({ method: 'POST' })
+  .validator(crawlIdSchema)
+  .handler(async ({ data }) => {
+    return { queued: resumeCrawlJobs(db, data.crawlId) }
+  })
+
+export const refetchPage = createServerFn({ method: 'POST' })
+  .validator(pageRefSchema)
+  .handler(async ({ data }) => {
+    return { queued: refetchPageJobs(db, data.crawlId, data.pageId) }
+  })
+
+export const expandPage = createServerFn({ method: 'POST' })
+  .validator(expandPageSchema)
+  .handler(async ({ data }) => {
+    const result = expandPageJobs(db, data.crawlId, data.pageId, data.levels)
+    if (!result) throw new Error('Page not found')
+    return result
   })
 
 export const deleteCrawl = createServerFn({ method: 'POST' })

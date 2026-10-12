@@ -2,10 +2,11 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { ReactFlowProvider } from '@xyflow/react'
-import { ArrowLeft, LayoutGrid, Network, PanelLeft, Square } from 'lucide-react'
+import { ArrowLeft, LayoutGrid, Network, PanelLeft, Play, Square } from 'lucide-react'
 import { toast } from 'sonner'
 import { RunnerStatus } from '#/components/RunnerStatus'
 import { StatusBadge } from '#/components/StatusBadge'
+import { GoDeeper } from '#/components/sitemap/GoDeeper'
 import { LayersPanel } from '#/components/sitemap/LayersPanel'
 import { PageDetailPanel } from '#/components/sitemap/PageDetailPanel'
 import { SitemapCanvas, type FocusRequest } from '#/components/sitemap/SitemapCanvas'
@@ -13,9 +14,8 @@ import { useBoard } from '#/components/sitemap/useBoard'
 import { Button } from '#/components/ui/button'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '#/components/ui/resizable'
 import { crawlQuery, isActive } from '#/lib/queries'
-import { isPageOpen } from '#/lib/schemas'
 import { VIEWPORTS, VIEWPORT_IDS, type ViewportId } from '#/lib/viewports'
-import { cancelCrawl, resetNodePositions } from '#/server/functions/crawls'
+import { cancelCrawl, resumeCrawl } from '#/server/functions/crawls'
 
 export const Route = createFileRoute('/crawls/$crawlId')({
   loader: ({ context, params }) =>
@@ -94,15 +94,15 @@ function CrawlPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['crawls'] }),
     onError: (err) => toast.error(err.message),
   })
-  const relayout = useMutation({
-    mutationFn: resetNodePositions,
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['crawls', crawlId] })
-      measureCanvas()
-      setLayoutVersion((v) => v + 1)
-    },
+  const resume = useMutation({
+    mutationFn: resumeCrawl,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['crawls'] }),
     onError: (err) => toast.error(err.message),
   })
+  const relayout = () => {
+    measureCanvas()
+    setLayoutVersion((v) => v + 1)
+  }
 
   const pickPage = useCallback((pageId: string) => {
     setSelectedPageId(pageId)
@@ -123,8 +123,12 @@ function CrawlPage() {
 
   const previewOpen = !!previewPageId && pages.some((p) => p.id === previewPageId)
 
-  const done = pages.filter((p) => !isPageOpen(p.status)).length
+  const done = pages.filter((p) => p.status === 'done' || p.status === 'failed').length
   const failed = pages.filter((p) => p.status === 'failed').length
+  const interrupted = pages.filter((p) => p.status === 'cancelled').length
+  const root = pages.find((p) => p.depth === 0)
+  const active = isActive(crawl.status)
+  const canResume = !active && (interrupted > 0 || root?.status === 'failed')
 
   return (
     <div className="flex h-screen flex-col">
@@ -141,11 +145,12 @@ function CrawlPage() {
           </div>
           <p className="text-muted-foreground text-xs">
             {done}/{pages.length} pages captured
-            {failed > 0 && ` · ${failed} failed`} · depth {crawl.maxDepth} ·{' '}
+            {failed > 0 && ` · ${failed} failed`}
+            {interrupted > 0 && ` · ${interrupted} not captured`} · depth {crawl.maxDepth} ·{' '}
             {crawl.viewports.map((v) => VIEWPORTS[v].label).join(', ')}
             {crawl.error && <span className="text-destructive"> · {crawl.error}</span>}
           </p>
-          {isActive(crawl.status) && <RunnerStatus onlyWhenMissing />}
+          {active && <RunnerStatus onlyWhenMissing />}
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {viewports.length > 1 && (
@@ -185,13 +190,25 @@ function CrawlPage() {
           <Button
             variant="outline"
             size="sm"
-            disabled={relayout.isPending}
-            onClick={() => relayout.mutate({ data: { crawlId } })}
+            onClick={relayout}
           >
             <LayoutGrid />
             Re-layout
           </Button>
-          {isActive(crawl.status) && (
+          {/* Resume comes first: going deeper skips the pages Stop interrupted. */}
+          {!active && !canResume && root?.status === 'done' && <GoDeeper crawlId={crawlId} pageId={root.id} />}
+          {canResume && (
+            <Button
+              size="sm"
+              disabled={resume.isPending}
+              onClick={() => resume.mutate({ data: { crawlId } })}
+              title="Capture the pages the crawl didn't get to, keeping the ones it did"
+            >
+              <Play />
+              Resume
+            </Button>
+          )}
+          {active && (
             <Button
               variant="destructive"
               size="sm"
@@ -208,7 +225,7 @@ function CrawlPage() {
       <div className="relative flex min-h-0 flex-1">
         {pages.length === 0 ? (
           <div className="text-muted-foreground flex flex-1 items-center justify-center text-sm">
-            {isActive(crawl.status) ? 'Waiting for the first page…' : 'No pages were captured.'}
+            {active ? 'Waiting for the first page…' : 'No pages were captured.'}
           </div>
         ) : (
           <ReactFlowProvider>

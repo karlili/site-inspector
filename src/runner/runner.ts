@@ -48,7 +48,7 @@ export class Runner {
 
   private browser?: Promise<{ browser: Browser; userAgent: string }>
   private readonly active = new Set<string>()
-  private readonly robots = new Map<string, RobotsRules | undefined>()
+  private readonly robots = new Map<string, { text: string | null; rules?: RobotsRules }>()
   private readonly sleepers = new Set<() => void>()
   private readonly slots = new Map<number, Promise<void>>()
   private heartbeatTimer?: NodeJS.Timeout
@@ -150,6 +150,7 @@ export class Runner {
     const { page, crawl } = job
     this.log(`claimed ${page.url} (crawl ${crawl.id}, depth ${page.depth})`)
     let kept = false
+    const captureId = randomUUID().slice(0, 8)
     try {
       const { browser, userAgent } = await this.getBrowser()
       const result = await capturePage({
@@ -159,6 +160,7 @@ export class Runner {
         page,
         robots: page.depth === 0 ? undefined : this.robotsFor(job),
         screenshotDir: this.screenshotDir,
+        captureId,
         navTimeoutMs: job.settings.navTimeoutMs,
         isCancelled: () => !isCrawlActive(this.db, crawl.id),
       })
@@ -177,17 +179,24 @@ export class Runner {
         })
       }
     }
-    // If the lease was lost while the crawl is still going, another runner owns the
-    // page now and is writing the same files, so only clean up after a cancel/delete.
-    if (!kept && !isCrawlActive(this.db, crawl.id)) await this.removeCaptures(job)
+    // Each capture writes its own files: drop ours if they weren't kept, or the
+    // page's earlier ones (from before a refetch) now that ours replaced them.
+    await this.removeCaptures(job, (file) => file.startsWith(`${page.id}-${captureId}-`) !== kept)
   }
 
-  /** Robots rules are stored on the crawl by its root page; parse them once per crawl. */
+  /**
+   * Robots rules are stored on the crawl by its root page; parse them once per
+   * crawl, and again if refetching the root page changed them.
+   */
   private robotsFor({ crawl }: ClaimedJob) {
-    if (!this.robots.has(crawl.id)) {
-      this.robots.set(crawl.id, crawl.robotsTxt ? parseRobots(crawl.robotsTxt) : undefined)
+    const cached = this.robots.get(crawl.id)
+    if (cached?.text !== crawl.robotsTxt) {
+      this.robots.set(crawl.id, {
+        text: crawl.robotsTxt,
+        rules: crawl.robotsTxt ? parseRobots(crawl.robotsTxt) : undefined,
+      })
     }
-    return this.robots.get(crawl.id)
+    return this.robots.get(crawl.id)!.rules
   }
 
   /** Relaunches Chromium if it has gone away (once, however many slots notice). */
@@ -200,13 +209,13 @@ export class Runner {
     return this.browser!
   }
 
-  /** Files captured for a page whose crawl was cancelled or deleted meanwhile. */
-  private async removeCaptures({ page, crawl }: ClaimedJob) {
+  /** Delete the page's capture files that `remove` picks. */
+  private async removeCaptures({ page, crawl }: ClaimedJob, remove: (file: string) => boolean) {
     const dir = path.join(this.screenshotDir, crawl.id)
     const files = await fs.readdir(dir).catch(() => [] as string[])
     await Promise.all(
       files
-        .filter((f) => f.startsWith(`${page.id}-`))
+        .filter((f) => f.startsWith(`${page.id}-`) && remove(f))
         .map((f) => fs.rm(path.join(dir, f), { force: true })),
     )
   }

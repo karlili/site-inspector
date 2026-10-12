@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react'
-import { ExternalLink, X } from 'lucide-react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { ExternalLink, RotateCw, X } from 'lucide-react'
+import { toast } from 'sonner'
 import { StatusBadge } from '#/components/StatusBadge'
+import { GoDeeper } from '#/components/sitemap/GoDeeper'
 import { Button } from '#/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import { screenshotUrl, type CrawlDetail } from '#/lib/queries'
 import { isPageOpen } from '#/lib/schemas'
+import { cn } from '#/lib/utils'
 import { VIEWPORTS, VIEWPORT_IDS, type ViewportId } from '#/lib/viewports'
+import { refetchPage } from '#/server/functions/crawls'
 
 interface Props {
   detail: CrawlDetail
@@ -32,7 +37,19 @@ export function PageDetailPanel({ detail, pageId, viewport, onPick, onClose }: P
   useEffect(() => setTab(viewport), [viewport])
   const shown = shots.some((s) => s.viewport === tab) ? tab : shots[0]?.viewport
 
+  const queryClient = useQueryClient()
+  const refetch = useMutation({
+    mutationFn: refetchPage,
+    onSuccess: ({ queued }) => {
+      if (!queued) toast.message('This page is already being captured.')
+      return queryClient.invalidateQueries({ queryKey: ['crawls'] })
+    },
+    onError: (err) => toast.error(err.message),
+  })
+
   if (!page) return null
+  const open = isPageOpen(page.status)
+  const crawlId = detail.crawl.id
   return (
     <aside className="bg-card flex h-full flex-col" aria-label="Page preview">
       <header className="grid gap-2 border-b p-4">
@@ -56,8 +73,28 @@ export function PageDetailPanel({ detail, pageId, viewport, onPick, onClose }: P
           {page.httpStatus && <span>HTTP {page.httpStatus}</span>}
           <span>Depth {page.depth}</span>
           <span>{referrers.length} inbound · {linksOut} outbound links</span>
+          <span title="How deep links are followed below this page">
+            Links followed to depth {page.expandToDepth ?? detail.crawl.maxDepth}
+          </span>
         </div>
-        {page.error && <p className="text-destructive text-sm">{page.error}</p>}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="xs"
+            disabled={open || refetch.isPending}
+            onClick={() => refetch.mutate({ data: { crawlId, pageId } })}
+            title="Capture this page again and rediscover its links"
+          >
+            <RotateCw className={cn(open && 'animate-spin')} />
+            {open ? 'Capturing…' : 'Refetch'}
+          </Button>
+          <GoDeeper crawlId={crawlId} pageId={pageId} size="xs" disabled={page.status !== 'done'} />
+        </div>
+        {page.error && (
+          <p className={cn('text-sm', page.status === 'cancelled' ? 'text-muted-foreground' : 'text-destructive')}>
+            {page.error}
+          </p>
+        )}
         {referrers.length > 0 && (
           <details className="text-xs">
             <summary className="text-muted-foreground hover:text-foreground cursor-pointer">

@@ -53,6 +53,10 @@ export const pages = sqliteTable(
     claimedBy: text('claimed_by'),
     leaseExpiresAt: integer('lease_expires_at', { mode: 'timestamp_ms' }),
     attempts: integer().notNull().default(0),
+    /** Every same-site URL the page linked to, kept even when its children weren't enqueued. */
+    outlinks: text({ mode: 'json' }).$type<string[]>(),
+    /** Set by "go deeper": how deep this page's branch may go, instead of the crawl's max depth. */
+    expandToDepth: integer('expand_to_depth'),
   },
   (t) => [
     uniqueIndex('pages_crawl_url_idx').on(t.crawlId, t.url),
