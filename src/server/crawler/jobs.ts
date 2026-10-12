@@ -28,6 +28,8 @@ export const RUNNER_OFFLINE_MS = 30_000
  * ignores the crawl's own page limit). The board saves at most this many positions.
  */
 export const MAX_PAGES_HARD = 5000
+/** Pages listed only in sitemap.xml that a crawl captures, on top of its page limit. */
+export const MAX_SITEMAP_PAGES = 200
 
 const ACTIVE_CRAWL = ['queued', 'running'] as const
 const OPEN_PAGE = ['pending', 'running'] as const
@@ -57,6 +59,8 @@ export interface PageResult {
   /** Root page only: the host the site actually lives on and its robots.txt. */
   hostname?: string
   robotsTxt?: string | null
+  /** Root page only: the crawlable page URLs its sitemap.xml lists. */
+  sitemapUrls?: string[]
 }
 
 /** Insert a crawl together with its root page, ready for a runner to claim. */
@@ -195,6 +199,7 @@ export function completePage(
           .set({
             hostname: result.hostname,
             robotsTxt: result.robotsTxt ?? null,
+            sitemapUrls: result.sitemapUrls?.length ? result.sitemapUrls : null,
             crawlDelayMs:
               crawlDelayMs === undefined ? null : Math.min(crawlDelayMs, MAX_CRAWL_DELAY_MS),
           })
@@ -581,9 +586,57 @@ function settleCrawl(tx: Tx, crawlId: string) {
     .where(and(eq(pages.crawlId, crawlId), inArray(pages.status, OPEN_PAGE)))
     .get()!.n
   if (open === 0) {
+    // Captured last, once nothing left to crawl could still link to them.
+    if (addSitemapOrphans(tx, crawl) > 0) return
     tx.update(crawls)
       .set({ status: 'done', error: null, finishedAt: new Date() })
       .where(eq(crawls.id, crawlId))
       .run()
   }
+}
+
+/**
+ * Queue the pages sitemap.xml lists that no crawled page links to: orphans.
+ * URLs a captured page links to are skipped even when the crawl didn't go deep
+ * enough to capture them; they're reachable. Their depth is the crawl's limit
+ * (but never 0, which marks the start page), so their own links are recorded
+ * but don't queue more pages.
+ */
+function addSitemapOrphans(tx: Tx, crawl: Crawl): number {
+  if (!crawl.sitemapUrls?.length) return 0
+  const existing = tx
+    .select({ total: count(), fromSitemap: sql<number>`sum(${pages.source} = 'sitemap')` })
+    .from(pages)
+    .where(eq(pages.crawlId, crawl.id))
+    .get()!
+  const room = Math.min(MAX_SITEMAP_PAGES - (existing.fromSitemap ?? 0), MAX_PAGES_HARD - existing.total)
+  if (room <= 0) return 0
+
+  const orphans = tx.all<{ url: string }>(sql`
+    select s.value as url from json_each(${JSON.stringify(crawl.sitemapUrls)}) s
+    where s.value not in (select url from ${pages} where crawl_id = ${crawl.id})
+      and s.value not in (
+        select o.value from ${pages} p, json_each(p.outlinks) o
+        where p.crawl_id = ${crawl.id} and p.outlinks is not null
+      )
+    limit ${room}`)
+  if (orphans.length === 0) return 0
+
+  tx.insert(pages)
+    .values(
+      orphans.map(({ url }) => ({
+        id: randomUUID(),
+        crawlId: crawl.id,
+        url,
+        depth: Math.max(1, crawl.maxDepth),
+        source: 'sitemap' as const,
+      })),
+    )
+    .onConflictDoNothing()
+    .run()
+  tx.update(crawls)
+    .set({ pageCount: sql`(select count(*) from ${pages} where ${pages.crawlId} = ${crawl.id})` })
+    .where(eq(crawls.id, crawl.id))
+    .run()
+  return orphans.length
 }

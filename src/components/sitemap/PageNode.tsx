@@ -1,6 +1,6 @@
 import { Fragment, createContext, memo, useContext } from 'react'
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
-import { CirclePause, ImageOff, Loader2, Maximize2 } from 'lucide-react'
+import { CirclePause, ImageOff, Link2Off, Loader2, Maximize2 } from 'lucide-react'
 import { cn } from '#/lib/utils'
 import { isPageOpen, type PageStatus } from '#/lib/schemas'
 
@@ -13,6 +13,10 @@ export type PageNodeData = {
   error: string | null
   preview: { full: string; small: string } | null
   cropped: boolean
+  /** No link leads here from the start page. */
+  orphan: boolean
+  /** Links on this page to pages that are missing or wouldn't load. */
+  brokenLinks: number
 }
 
 export type PageNodeType = Node<PageNodeData, 'page'>
@@ -65,6 +69,16 @@ export const PageNode = memo(function PageNode({ id, data, selected }: NodeProps
           <Loader2 className="size-3 shrink-0 animate-spin" aria-label="Capturing" />
         )}
         {badStatus && <span className="bg-destructive shrink-0 px-1 text-[10px] text-white">{data.httpStatus}</span>}
+        {data.orphan && <span className="bg-warning shrink-0 px-1 text-[10px] text-white">Orphan</span>}
+        {data.brokenLinks > 0 && (
+          <span
+            className="text-destructive-foreground border-destructive-foreground flex shrink-0 items-center gap-0.5 border px-1 text-[10px] tabular-nums"
+            title={`${data.brokenLinks} broken ${data.brokenLinks === 1 ? 'link' : 'links'}`}
+          >
+            <Link2Off className="size-2.5" />
+            {data.brokenLinks}
+          </span>
+        )}
         <button
           type="button"
           className={cn(
@@ -87,6 +101,7 @@ export const PageNode = memo(function PageNode({ id, data, selected }: NodeProps
           'page-frame bg-card relative h-full w-full overflow-hidden',
           selected && 'page-frame-selected',
           failed && 'page-frame-failed',
+          data.orphan && !failed && 'page-frame-orphan',
         )}
       >
         {data.preview ? (

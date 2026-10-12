@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ExternalLink, RotateCw, X } from 'lucide-react'
+import { ExternalLink, Link2Off, RotateCw, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { StatusBadge } from '#/components/StatusBadge'
 import { GoDeeper } from '#/components/sitemap/GoDeeper'
 import { Button } from '#/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
+import type { LinkHealth } from '#/lib/linkHealth'
 import { screenshotUrl, type CrawlDetail } from '#/lib/queries'
 import { isPageOpen } from '#/lib/schemas'
 import { cn } from '#/lib/utils'
@@ -14,6 +15,7 @@ import { refetchPage } from '#/server/functions/crawls'
 
 interface Props {
   detail: CrawlDetail
+  health: LinkHealth
   pageId: string
   /** The screen size the board is showing; its tab opens first. */
   viewport: ViewportId
@@ -22,7 +24,7 @@ interface Props {
 }
 
 /** Docked to the right of the board: one page's full-size screenshots and where it's linked from. */
-export function PageDetailPanel({ detail, pageId, viewport, onPick, onClose }: Props) {
+export function PageDetailPanel({ detail, health, pageId, viewport, onPick, onClose }: Props) {
   const page = detail.pages.find((p) => p.id === pageId)
   const shots = detail.screenshots
     .filter((s) => s.pageId === pageId)
@@ -31,6 +33,7 @@ export function PageDetailPanel({ detail, pageId, viewport, onPick, onClose }: P
   const referrers = detail.links
     .filter((l) => l.toPageId === pageId && l.fromPageId !== pageId)
     .flatMap((l) => detail.pages.find((p) => p.id === l.fromPageId) ?? [])
+  const brokenLinks = (health.brokenOut.get(pageId) ?? []).flatMap((id) => detail.pages.find((p) => p.id === id) ?? [])
 
   // Follow the board's screen size, but let the tabs switch on their own.
   const [tab, setTab] = useState<ViewportId>(viewport)
@@ -94,6 +97,37 @@ export function PageDetailPanel({ detail, pageId, viewport, onPick, onClose }: P
           <p className={cn('text-sm', page.status === 'cancelled' ? 'text-muted-foreground' : 'text-destructive')}>
             {page.error}
           </p>
+        )}
+        {health.orphans.has(pageId) && (
+          <p className="border-warning text-warning border-l-2 pl-2 text-xs">
+            Orphan: {page.source === 'sitemap' ? 'listed in sitemap.xml, but no' : 'no'} chain of links leads here
+            from the start page.
+          </p>
+        )}
+        {brokenLinks.length > 0 && (
+          <div className="text-xs">
+            <p className="text-destructive-foreground flex items-center gap-1 font-medium">
+              <Link2Off className="size-3.5" />
+              {brokenLinks.length} broken {brokenLinks.length === 1 ? 'link' : 'links'}
+            </p>
+            <ul className="mt-1 max-h-32 overflow-y-auto">
+              {brokenLinks.map((target) => (
+                <li key={target.id}>
+                  <button
+                    type="button"
+                    onClick={() => onPick(target.id)}
+                    className="hover:bg-accent flex w-full items-center gap-2 px-1 py-0.5 text-left"
+                    title={target.error ?? target.url}
+                  >
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{new URL(target.url).pathname}</span>
+                    <span className="text-destructive-foreground shrink-0 text-[11px]">
+                      {target.httpStatus ? `HTTP ${target.httpStatus}` : "Didn't load"}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
         {referrers.length > 0 && (
           <details className="text-xs">

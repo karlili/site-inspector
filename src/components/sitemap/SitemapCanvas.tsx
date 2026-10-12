@@ -13,6 +13,7 @@ import {
   type NodeChange,
   type Rect,
 } from '@xyflow/react'
+import type { LinkHealth } from '#/lib/linkHealth'
 import type { CrawlDetail } from '#/lib/queries'
 import { cn } from '#/lib/utils'
 import { sectionBounds } from './layout'
@@ -37,6 +38,7 @@ export type FocusRequest = { pageId: string } | { pageIds: string[] } | { sectio
 interface Props {
   detail: CrawlDetail
   board: BoardModel
+  health: LinkHealth
   showLinks: boolean
   /** Bumped by the parent when it re-runs the auto layout. */
   layoutVersion: number
@@ -54,6 +56,7 @@ interface Props {
 export function SitemapCanvas({
   detail,
   board,
+  health,
   showLinks,
   layoutVersion,
   selectedPageId,
@@ -106,11 +109,13 @@ export function SitemapCanvas({
             error: page.error,
             preview: frame.preview,
             cropped: frame.cropped,
+            orphan: health.orphans.has(id),
+            brokenLinks: health.brokenOut.get(id)?.length ?? 0,
           },
         }
       }),
     )
-  }, [board, setFrames, layoutVersion])
+  }, [board, health, setFrames, layoutVersion])
 
   // Selection, preview and search dimming only touch the frames whose state changed.
   useEffect(() => {
@@ -125,8 +130,8 @@ export function SitemapCanvas({
           : { ...node, selected, className }
       }),
     )
-    // board/layoutVersion: the frames were just rebuilt without selection state.
-  }, [board, layoutVersion, selectedPageId, previewPageId, highlightIds, setFrames])
+    // board/health/layoutVersion: the frames were just rebuilt without selection state.
+  }, [board, health, layoutVersion, selectedPageId, previewPageId, highlightIds, setFrames])
 
   const sections = useMemo<SectionNodeType[]>(() => {
     const byId = new Map(frames.map((f) => [f.id, f]))
@@ -247,17 +252,24 @@ export function SitemapCanvas({
           focusable: false,
           // Over the frames, or they'd hide most of every link.
           zIndex: 2000,
-          className: selectedPageId ? (outgoing ? 'link-out' : 'link-in') : 'link-all',
+          className: cn(
+            selectedPageId ? (outgoing ? 'link-out' : 'link-in') : 'link-all',
+            health.brokenTargets.has(link.toPageId) && 'link-broken',
+          ),
           markerEnd: {
             type: MarkerType.ArrowClosed,
             width: 16,
             height: 16,
-            color: outgoing ? 'var(--frame-selected)' : 'var(--muted-foreground)',
+            color: health.brokenTargets.has(link.toPageId)
+              ? 'var(--destructive-foreground)'
+              : outgoing
+                ? 'var(--frame-selected)'
+                : 'var(--muted-foreground)',
           },
         },
       ]
     })
-  }, [frames, links, showLinks, selectedPageId])
+  }, [frames, links, health, showLinks, selectedPageId])
 
   const actions = useMemo(
     () => ({ openPage: onOpenPage, focusSection: (sectionId: string) => focus({ sectionId }) }),

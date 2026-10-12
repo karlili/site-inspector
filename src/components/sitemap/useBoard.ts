@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { screenshotUrl, type CrawlDetail } from '#/lib/queries'
 import { frameSize, previewPath, type ViewportId } from '#/lib/viewports'
-import { ROOT_SECTION, layoutBoard, type Board } from './layout'
+import { ROOT_SECTION, SITEMAP_SECTION, layoutBoard, type Board } from './layout'
 
 type Page = CrawlDetail['pages'][number]
 
@@ -64,7 +64,9 @@ export function useBoard(detail: CrawlDetail, viewport: ViewportId, aspect: numb
         ? parent.path
         : section.id === ROOT_SECTION
           ? section.pageIds.length > 1 ? 'Start pages' : 'Start page'
-          : 'Other pages'
+          : section.id === SITEMAP_SECTION
+            ? 'Not linked · sitemap.xml'
+            : 'Other pages'
       return { id: section.id, pageIds: section.pageIds, parent, title }
     })
 

@@ -12,6 +12,7 @@ import { SCREENSHOT_DIR } from '../paths'
 import type { PageResult } from './jobs'
 import { fetchRobotsText, parseRobots, type RobotsRules } from './robots'
 import { captureScreenshot } from './screenshot'
+import { fetchSitemapUrls } from './sitemap'
 import { isSameSite, looksLikeHtml, normalizeUrl } from './url'
 
 const USER_AGENT_SUFFIX = 'SiteInspector/1.0'
@@ -100,26 +101,35 @@ export async function capturePage({
           result.title = (await page.title()) || null
 
           // The root may redirect (e.g. to www.); follow the site it lands on.
+          // Its robots.txt is read even when the crawl ignores the rules: it
+          // says where the sitemaps are.
+          let sitemapUrls: string[] = []
           if (item.depth === 0) {
-            hostname = new URL(finalUrl).hostname
+            const { hostname: host, origin } = new URL(finalUrl)
+            hostname = host
             result.hostname = hostname
-            result.robotsTxt = crawl.respectRobots
-              ? await fetchRobotsText(new URL(finalUrl).origin)
-              : null
+            const robotsTxt = await fetchRobotsText(origin)
+            result.robotsTxt = crawl.respectRobots ? robotsTxt : null
             robots = result.robotsTxt ? parseRobots(result.robotsTxt) : undefined
+            sitemapUrls = await fetchSitemapUrls(origin, robotsTxt)
           }
 
+          // Same-site pages the crawl may visit, normalized and de-duplicated.
+          const crawlable = (raw: string[]) => {
+            const urls = new Set<string>()
+            for (const href of raw) {
+              const url = normalizeUrl(href)
+              if (!url || !isSameSite(url, hostname) || !looksLikeHtml(url)) continue
+              if (robots && !robots.isAllowed(url)) continue
+              urls.add(url)
+            }
+            return [...urls]
+          }
           const hrefs = await page.$$eval('a[href], area[href]', (els) =>
             els.map((el) => (el as HTMLAnchorElement).href),
           )
-          const targets = new Set<string>()
-          for (const href of hrefs) {
-            const url = normalizeUrl(href)
-            if (!url || !isSameSite(url, hostname) || !looksLikeHtml(url)) continue
-            if (robots && !robots.isAllowed(url)) continue
-            targets.add(url)
-          }
-          result.discoveredUrls = [...targets]
+          result.discoveredUrls = crawlable(hrefs)
+          if (item.depth === 0) result.sitemapUrls = crawlable(sitemapUrls)
         }
 
         const shot = await captureScreenshot(page, viewport, screenshotDir, crawl.id, `${item.id}-${captureId}`)

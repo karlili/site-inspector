@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ROOT_SECTION, layoutBoard, sectionBounds, type BoardPage } from './layout'
+import { ROOT_SECTION, SITEMAP_SECTION, layoutBoard, sectionBounds, type BoardPage } from './layout'
 
 const size = { width: 288, height: 400 }
 const sizesFor = (pages: BoardPage[]) => new Map(pages.map((p) => [p.id, size]))
@@ -31,6 +31,21 @@ describe('layoutBoard', () => {
     expect(board.order).toEqual(['root', 'a', 'b', 'c', 'd', 'e'])
     expect(board.numbers.get('c')).toBe(4)
     expect(board.sectionOf.get('e')).toBe('b')
+  })
+
+  it('puts pages found only in sitemap.xml in a last section of their own', () => {
+    const withOrphans: BoardPage[] = [
+      ...pages.slice(0, 3),
+      { id: 'o1', parentPageId: null, source: 'sitemap' },
+      { id: 'o2', parentPageId: null, source: 'sitemap' },
+    ]
+    const board = layoutBoard(withOrphans, sizesFor(withOrphans))
+    expect(board.sections.map((s) => [s.id, s.pageIds])).toEqual([
+      [ROOT_SECTION, ['root']],
+      ['root', ['a', 'b']],
+      [SITEMAP_SECTION, ['o1', 'o2']],
+    ])
+    expect(board.order).toEqual(['root', 'a', 'b', 'o1', 'o2'])
   })
 
   it('places every frame without overlaps', () => {

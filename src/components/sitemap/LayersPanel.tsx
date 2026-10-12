@@ -6,11 +6,13 @@ import {
   CircleAlert,
   CirclePause,
   CornerDownRight,
+  Link2Off,
   Loader2,
   Search,
 } from 'lucide-react'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
+import type { LinkHealth } from '#/lib/linkHealth'
 import type { CrawlDetail } from '#/lib/queries'
 import { isPageOpen } from '#/lib/schemas'
 import { cn } from '#/lib/utils'
@@ -23,9 +25,10 @@ const INDENT = 14
 interface Props {
   board: BoardModel
   links: CrawlDetail['links']
+  health: LinkHealth
   query: string
   onQueryChange: (query: string) => void
-  /** Ids matching `query`, or null when not searching. */
+  /** Ids matching `query` and the issues filter, or null when neither is on. */
   matches: Set<string> | null
   selectedPageId: string | null
   onPick: (pageId: string) => void
@@ -47,6 +50,7 @@ type Row =
 export function LayersPanel({
   board,
   links,
+  health,
   query,
   onQueryChange,
   matches,
@@ -210,7 +214,9 @@ export function LayersPanel({
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto py-1 text-sm" role="tree" aria-label="Pages by the page that first linked to them">
         {rows.length === 0 && (
-          <p className="text-muted-foreground px-3 py-6 text-center text-xs">No pages match “{query}”.</p>
+          <p className="text-muted-foreground px-3 py-6 text-center text-xs">
+            {query.trim() ? `No pages match “${query.trim()}”.` : 'No pages to show.'}
+          </p>
         )}
         {rows.map((row) => {
           const pad = { paddingLeft: 8 + row.depth * INDENT }
@@ -251,6 +257,7 @@ export function LayersPanel({
           const kids = childrenOf.get(id)
           const expanded = kids ? !!visible || isExpanded(id) : undefined
           const refCount = referrers.get(id)?.length ?? 0
+          const brokenLinks = health.brokenOut.get(id)?.length ?? 0
           const dimmed = matches && !matches.has(id)
           return (
             <div
@@ -307,6 +314,19 @@ export function LayersPanel({
                 )}
                 {page.httpStatus != null && page.httpStatus >= 400 && (
                   <span className="bg-destructive mt-0.5 shrink-0 px-1 text-[10px] text-white">{page.httpStatus}</span>
+                )}
+                {health.orphans.has(id) && (
+                  <span className="bg-warning mt-0.5 shrink-0 px-1 text-[10px] text-white">Orphan</span>
+                )}
+                {brokenLinks > 0 && (
+                  <span
+                    className="text-destructive-foreground border-destructive-foreground mt-0.5 flex shrink-0 items-center gap-0.5 border px-1 text-[10px] tabular-nums"
+                    title={`${brokenLinks} broken ${brokenLinks === 1 ? 'link' : 'links'}`}
+                    aria-label={`${brokenLinks} broken ${brokenLinks === 1 ? 'link' : 'links'}`}
+                  >
+                    <Link2Off className="size-2.5" />
+                    {brokenLinks}
+                  </span>
                 )}
               </button>
               {refCount > 0 && (

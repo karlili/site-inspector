@@ -21,10 +21,13 @@ const SECTION_GAP_Y = 120
 const MAX_COLUMNS = 40
 
 export const ROOT_SECTION = '__root__'
+/** Pages listed in sitemap.xml that nothing links to; they come last. */
+export const SITEMAP_SECTION = '__sitemap__'
 
 export interface BoardPage {
   id: string
   parentPageId: string | null
+  source?: 'link' | 'sitemap'
 }
 
 export interface Rect {
@@ -86,8 +89,11 @@ function groupIntoSections(pages: BoardPage[]) {
   const ids = new Set(pages.map((p) => p.id))
   const children = new Map<string, string[]>()
   const roots: string[] = []
+  const unlinked: string[] = []
   for (const page of pages) {
-    if (page.parentPageId && page.parentPageId !== page.id && ids.has(page.parentPageId)) {
+    if (page.source === 'sitemap') {
+      unlinked.push(page.id)
+    } else if (page.parentPageId && page.parentPageId !== page.id && ids.has(page.parentPageId)) {
       const list = children.get(page.parentPageId) ?? []
       list.push(page.id)
       children.set(page.parentPageId, list)
@@ -104,6 +110,10 @@ function groupIntoSections(pages: BoardPage[]) {
     if (!kids) continue
     sections.push({ id: order[i], parentPageId: order[i], pageIds: kids })
     order.push(...kids)
+  }
+  if (unlinked.length) {
+    sections.push({ id: SITEMAP_SECTION, parentPageId: null, pageIds: unlinked })
+    order.push(...unlinked)
   }
 
   // Parent links can't loop in practice, but never drop a page if they do.

@@ -3,6 +3,10 @@ import { VIEWPORT_IDS } from './viewports'
 
 export const MAX_DEPTH = 5
 
+/** How a page got into a crawl: followed from a link, or listed in sitemap.xml and linked from nowhere. */
+export const pageSources = ['link', 'sitemap'] as const
+export type PageSource = (typeof pageSources)[number]
+
 export const viewportSchema = z.enum(VIEWPORT_IDS)
 
 export const crawlInputSchema = z.object({

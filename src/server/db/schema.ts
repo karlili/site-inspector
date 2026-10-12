@@ -7,7 +7,7 @@ import {
   text,
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core'
-import { crawlStatuses, pageStatuses } from '#/lib/schemas'
+import { crawlStatuses, pageSources, pageStatuses } from '#/lib/schemas'
 import type { ViewportId } from '#/lib/viewports'
 
 export const crawls = sqliteTable('crawls', {
@@ -25,6 +25,8 @@ export const crawls = sqliteTable('crawls', {
   robotsTxt: text('robots_txt'),
   /** The robots.txt Crawl-delay, if it set one. */
   crawlDelayMs: integer('crawl_delay_ms'),
+  /** Same-site page URLs the site's sitemap.xml lists, fetched by the root page's job. */
+  sitemapUrls: text('sitemap_urls', { mode: 'json' }).$type<string[]>(),
   /** The earliest a runner may start loading this crawl's next page. */
   nextFetchAt: integer('next_fetch_at', { mode: 'timestamp_ms' }),
   createdAt: integer('created_at', { mode: 'timestamp' })
@@ -57,6 +59,7 @@ export const pages = sqliteTable(
     outlinks: text({ mode: 'json' }).$type<string[]>(),
     /** Set by "go deeper": how deep this page's branch may go, instead of the crawl's max depth. */
     expandToDepth: integer('expand_to_depth'),
+    source: text({ enum: pageSources }).notNull().default('link'),
   },
   (t) => [
     uniqueIndex('pages_crawl_url_idx').on(t.crawlId, t.url),

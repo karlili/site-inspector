@@ -30,6 +30,8 @@
   --section: oklch(0.975 0.002 286);
   --section-border: oklch(0.87 0.004 286);
   --frame-selected: oklch(0.58 0.2 258);
+  /* Orphan pages: found, but nothing links to them. */
+  --warning: oklch(0.666 0.179 58.318);
   --minimap-frame: oklch(0.8 0.004 286);
   --minimap-section: oklch(0.9 0.003 286);
   --minimap-mask: oklch(0.94 0.002 286 / 0.7);
@@ -62,6 +64,7 @@
   --section: oklch(0.225 0.004 286);
   --section-border: oklch(0.3 0.006 286);
   --frame-selected: oklch(0.66 0.17 258);
+  --warning: oklch(0.769 0.188 70.08);
   --minimap-frame: oklch(0.45 0.008 286);
   --minimap-section: oklch(0.28 0.006 286);
   --minimap-mask: oklch(0.19 0.003 286 / 0.7);
@@ -92,6 +95,7 @@
   --color-ring: var(--ring);
   --color-canvas: var(--canvas);
   --color-frame-selected: var(--frame-selected);
+  --color-warning: var(--warning);
 }
 
 /* Flatten the whole radius scale so no utility can produce rounded corners. */
@@ -194,6 +198,9 @@
 .page-frame-failed {
   outline: calc(1px / var(--zoom)) solid var(--destructive-foreground);
 }
+.page-frame-orphan {
+  outline: calc(1px / var(--zoom)) dashed var(--warning);
+}
 .section-box {
   background: var(--section);
   border: calc(1px / var(--zoom)) solid var(--section-border);
@@ -224,4 +231,10 @@
   stroke: var(--muted-foreground);
   stroke-width: calc(1px / var(--zoom));
   opacity: 0.35;
+}
+/* After the others so a broken link stands out whichever way it's drawn. */
+.sitemap-board .react-flow__edge.link-broken .react-flow__edge-path {
+  stroke: var(--destructive-foreground);
+  stroke-width: calc(1.5px / var(--zoom));
+  opacity: 1;
 }

@@ -34,7 +34,12 @@ const site: Record<string, string> = {
   '/a/deeper': html('Deeper', ''),
   '/b': html('Page B', '<a href="/">Home</a> <a href="/missing">Missing</a>'),
   '/private': html('Private', ''),
+  // Only in sitemap.xml: an orphan.
+  '/hidden': html('Hidden', '<a href="/a">A</a>'),
 }
+
+// Linked pages, the orphan, and URLs the crawl must skip (robots-blocked, not HTML, off-site).
+const sitemapPaths = ['/a', '/a/deep', '/hidden', '/private', '/file.pdf']
 
 let server: http.Server
 let baseUrl: string
@@ -44,6 +49,13 @@ beforeAll(async () => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     if (url.pathname === '/robots.txt') {
       res.writeHead(200, { 'content-type': 'text/plain' }).end('User-agent: *\nDisallow: /private')
+      return
+    }
+    if (url.pathname === '/sitemap.xml') {
+      const locs = [...sitemapPaths.map((p) => `${baseUrl}${p}`), 'https://external.invalid/page']
+      res
+        .writeHead(200, { 'content-type': 'application/xml' })
+        .end(`<urlset>${locs.map((loc) => `<url><loc>${loc}</loc></url>`).join('')}</urlset>`)
       return
     }
     const body = site[url.pathname] ?? devicePages[url.pathname]?.(req.headers['user-agent'] ?? '')
@@ -112,12 +124,21 @@ describe('runCrawl', () => {
 
     const paths = pages.map((p) => new URL(p.url).pathname).sort()
     // Depth 1: root plus its direct same-site links; robots-blocked, external, pdf and mailto skipped.
-    expect(paths).toEqual(['/', '/a', '/b'])
+    // /hidden is only in the sitemap; /a/deep is in it too, but /a links to it.
+    expect(paths).toEqual(['/', '/a', '/b', '/hidden'])
     expect(pages.every((p) => p.status === 'done')).toBe(true)
     expect(pages.find((p) => p.depth === 0)?.title).toBe('Home')
 
     const root = pages.find((p) => p.depth === 0)!
-    expect(pages.filter((p) => p.depth === 1).every((p) => p.parentPageId === root.id)).toBe(true)
+    const linked = pages.filter((p) => p.source === 'link' && p.depth === 1)
+    expect(linked.every((p) => p.parentPageId === root.id)).toBe(true)
+
+    // The orphan is captured like any page, with nothing linking to it, but its own links kept.
+    const hidden = pages.find((p) => p.url.endsWith('/hidden'))!
+    expect(hidden).toMatchObject({ source: 'sitemap', parentPageId: null, depth: 1 })
+    expect(links.some((l) => l.toPageId === hidden.id)).toBe(false)
+    expect(links.some((l) => l.fromPageId === hidden.id)).toBe(true)
+    expect(crawl.sitemapUrls).toEqual(sitemapPaths.slice(0, 3).map((p) => `${baseUrl}${p}`))
 
     // One full-page capture per page per viewport, written to disk.
     expect(screenshots).toHaveLength(pages.length * 2)
@@ -150,7 +171,8 @@ describe('runCrawl', () => {
     const { crawl, pages } = await crawlSite(3, ['desktop'])
     expect(crawl.status).toBe('done')
     const byPath = new Map(pages.map((p) => [new URL(p.url).pathname, p]))
-    expect([...byPath.keys()].sort()).toEqual(['/', '/a', '/a/deep', '/a/deeper', '/b', '/missing'])
+    expect([...byPath.keys()].sort()).toEqual(['/', '/a', '/a/deep', '/a/deeper', '/b', '/hidden', '/missing'])
+    expect(byPath.get('/hidden')).toMatchObject({ source: 'sitemap', depth: 3 })
     expect(byPath.get('/a/deeper')?.depth).toBe(3)
     expect(byPath.get('/missing')?.httpStatus).toBe(404)
   })

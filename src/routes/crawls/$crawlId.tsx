@@ -2,7 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { ReactFlowProvider } from '@xyflow/react'
-import { ArrowLeft, LayoutGrid, Network, PanelLeft, Play, Square } from 'lucide-react'
+import { ArrowLeft, LayoutGrid, Network, PanelLeft, Play, Square, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 import { RunnerStatus } from '#/components/RunnerStatus'
 import { StatusBadge } from '#/components/StatusBadge'
@@ -13,6 +13,7 @@ import { SitemapCanvas, type FocusRequest } from '#/components/sitemap/SitemapCa
 import { useBoard } from '#/components/sitemap/useBoard'
 import { Button } from '#/components/ui/button'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '#/components/ui/resizable'
+import { analyzeLinks } from '#/lib/linkHealth'
 import { crawlQuery, isActive } from '#/lib/queries'
 import { VIEWPORTS, VIEWPORT_IDS, type ViewportId } from '#/lib/viewports'
 import { cancelCrawl, resumeCrawl } from '#/server/functions/crawls'
@@ -39,6 +40,7 @@ function CrawlPage() {
   const [previewPageId, setPreviewPageId] = useState<string | null>(null)
   const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null)
   const [showLinks, setShowLinks] = useState(false)
+  const [showIssues, setShowIssues] = useState(false)
   const [showLayers, setShowLayers] = useState(true)
   const [layoutVersion, setLayoutVersion] = useState(0)
   const [query, setQuery] = useState('')
@@ -66,16 +68,27 @@ function CrawlPage() {
 
   const board = useBoard(detail, viewport, boardAspect)
 
+  const health = useMemo(() => analyzeLinks(pages, detail.links), [pages, detail.links])
+  const brokenLinkCount = [...health.brokenOut.values()].reduce((n, targets) => n + targets.length, 0)
+
+  // Pages the search and the issues filter leave in view; null when neither is on.
   const matches = useMemo(() => {
     const q = deferredQuery.trim().toLowerCase()
-    if (!q) return null
+    if (!q && !showIssues) return null
     return new Set(
       board.order.filter((id) => {
+        if (showIssues && !health.issueIds.has(id)) return false
+        if (!q) return true
         const frame = board.frames.get(id)!
         return [frame.number, frame.path, frame.page.title ?? ''].some((s) => s.toLowerCase().includes(q))
       }),
     )
-  }, [board, deferredQuery])
+  }, [board, deferredQuery, showIssues, health])
+
+  const toggleIssues = () => {
+    if (!showIssues) setFocusRequest({ pageIds: [...health.issueIds] })
+    setShowIssues(!showIssues)
+  }
 
   // Bring search results into view once typing pauses. Keyed on the query, not
   // `matches`, which changes every time a running crawl refreshes the board.
@@ -146,7 +159,10 @@ function CrawlPage() {
           <p className="text-muted-foreground text-xs">
             {done}/{pages.length} pages captured
             {failed > 0 && ` · ${failed} failed`}
-            {interrupted > 0 && ` · ${interrupted} not captured`} · depth {crawl.maxDepth} ·{' '}
+            {interrupted > 0 && ` · ${interrupted} not captured`}
+            {brokenLinkCount > 0 && ` · ${brokenLinkCount} broken ${brokenLinkCount === 1 ? 'link' : 'links'}`}
+            {health.orphans.size > 0 && ` · ${health.orphans.size} orphan ${health.orphans.size === 1 ? 'page' : 'pages'}`}
+            {' '}· depth {crawl.maxDepth} ·{' '}
             {crawl.viewports.map((v) => VIEWPORTS[v].label).join(', ')}
             {crawl.error && <span className="text-destructive"> · {crawl.error}</span>}
           </p>
@@ -186,6 +202,18 @@ function CrawlPage() {
           >
             <Network />
             {showLinks ? 'Hide' : 'Show'} links
+          </Button>
+          <Button
+            variant={showIssues ? 'secondary' : 'outline'}
+            size="sm"
+            aria-pressed={showIssues}
+            disabled={health.issueIds.size === 0 && !showIssues}
+            title="Only pages with broken links, pages they point to, and orphan pages"
+            onClick={toggleIssues}
+          >
+            <TriangleAlert />
+            Issues
+            {health.issueIds.size > 0 && <span className="tabular-nums">{health.issueIds.size}</span>}
           </Button>
           <Button
             variant="outline"
@@ -244,6 +272,7 @@ function CrawlPage() {
                     <LayersPanel
                       board={board}
                       links={detail.links}
+                      health={health}
                       query={query}
                       onQueryChange={setQuery}
                       matches={matches}
@@ -261,6 +290,7 @@ function CrawlPage() {
                   <SitemapCanvas
                     detail={detail}
                     board={board}
+                    health={health}
                     showLinks={showLinks}
                     layoutVersion={layoutVersion}
                     selectedPageId={selectedPageId}
@@ -286,6 +316,7 @@ function CrawlPage() {
                   >
                     <PageDetailPanel
                       detail={detail}
+                      health={health}
                       pageId={previewPageId}
                       viewport={viewport}
                       onPick={pickPage}
