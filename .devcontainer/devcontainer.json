@@ -1,0 +1,17 @@
+{
+  "image": "mcr.microsoft.com/devcontainers/base:resolute",
+	"features": {
+		"ghcr.io/devcontainers/features/node:2": {},
+		"ghcr.io/postfinance/devcontainer-features/docker-in:1": {},
+		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
+	},
+  "customizations": {
+		"vscode": {
+			"extensions": [
+				"Anthropic.claude-code",
+				"ms-playwright.playwright",
+				"ms-azuretools.vscode-containers"
+			]
+		}
+	}
+}
