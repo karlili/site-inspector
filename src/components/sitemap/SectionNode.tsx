@@ -1,0 +1,43 @@
+import { memo, useContext } from 'react'
+import type { Node, NodeProps } from '@xyflow/react'
+import { SECTION_TITLE_SPACE } from './layout'
+import { BoardActionsContext } from './PageNode'
+
+export type SectionNodeData = {
+  sectionId: string
+  title: string
+  count: number
+  /** Board units free to the right before the next section's title; null if unlimited. */
+  titleRoom: number | null
+}
+
+export type SectionNodeType = Node<SectionNodeData, 'section'>
+
+/** Backdrop grouping the pages one page links to, with its title above the box. */
+export const SectionNode = memo(function SectionNode({ data }: NodeProps<SectionNodeType>) {
+  const { focusSection } = useContext(BoardActionsContext)
+  return (
+    <div className="pointer-events-none relative h-full w-full">
+      <button
+        type="button"
+        className="section-title hover:text-frame-selected pointer-events-auto flex items-baseline gap-2 pb-3 text-left text-sm leading-5"
+        style={{
+          bottom: `calc(100% - ${SECTION_TITLE_SPACE}px)`,
+          maxWidth: data.titleRoom == null ? undefined : `calc(${data.titleRoom}px / var(--title-scale))`,
+        }}
+        onClick={(event) => {
+          event.stopPropagation()
+          focusSection(data.sectionId)
+        }}
+        title={`${data.title} — zoom to section`}
+      >
+        <span className="max-w-full shrink-0 truncate font-semibold">{data.title}</span>
+        {/* When space is short the count gives way before the title does. */}
+        <span className="text-muted-foreground min-w-0 overflow-hidden text-xs tabular-nums">
+          {data.count} {data.count === 1 ? 'page' : 'pages'}
+        </span>
+      </button>
+      <div className="section-box absolute inset-x-0 bottom-0" style={{ top: SECTION_TITLE_SPACE }} />
+    </div>
+  )
+})

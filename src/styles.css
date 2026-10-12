@@ -1,0 +1,227 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import '@xyflow/react/dist/style.css';
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: oklch(0.985 0 0);
+  --foreground: oklch(0.141 0.005 285.823);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.141 0.005 285.823);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.141 0.005 285.823);
+  --primary: oklch(0.21 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.001 286.375);
+  --secondary-foreground: oklch(0.21 0.006 285.885);
+  --muted: oklch(0.967 0.001 286.375);
+  --muted-foreground: oklch(0.552 0.016 285.938);
+  --accent: oklch(0.967 0.001 286.375);
+  --accent-foreground: oklch(0.21 0.006 285.885);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.577 0.245 27.325);
+  --success: oklch(0.6 0.15 150);
+  --border: oklch(0.92 0.004 286.32);
+  --input: oklch(0.92 0.004 286.32);
+  --ring: oklch(0.705 0.015 286.067);
+  /* Sitemap board (Figma-like canvas). */
+  --canvas: oklch(0.94 0.002 286);
+  --section: oklch(0.975 0.002 286);
+  --section-border: oklch(0.87 0.004 286);
+  --frame-selected: oklch(0.58 0.2 258);
+  --minimap-frame: oklch(0.8 0.004 286);
+  --minimap-section: oklch(0.9 0.003 286);
+  --minimap-mask: oklch(0.94 0.002 286 / 0.7);
+  /* Square corners everywhere. */
+  --radius: 0px;
+}
+
+.dark {
+  --background: oklch(0.141 0.005 285.823);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.21 0.006 285.885);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.21 0.006 285.885);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.21 0.006 285.885);
+  --secondary: oklch(0.274 0.006 286.033);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.274 0.006 286.033);
+  --muted-foreground: oklch(0.705 0.015 286.067);
+  --accent: oklch(0.274 0.006 286.033);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.396 0.141 25.723);
+  --destructive-foreground: oklch(0.637 0.237 25.331);
+  --success: oklch(0.7 0.15 150);
+  --border: oklch(0.274 0.006 286.033);
+  --input: oklch(0.274 0.006 286.033);
+  --ring: oklch(0.442 0.017 285.786);
+  --canvas: oklch(0.19 0.003 286);
+  --section: oklch(0.225 0.004 286);
+  --section-border: oklch(0.3 0.006 286);
+  --frame-selected: oklch(0.66 0.17 258);
+  --minimap-frame: oklch(0.45 0.008 286);
+  --minimap-section: oklch(0.28 0.006 286);
+  --minimap-mask: oklch(0.19 0.003 286 / 0.7);
+}
+
+@theme inline {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-canvas: var(--canvas);
+  --color-frame-selected: var(--frame-selected);
+}
+
+/* Flatten the whole radius scale so no utility can produce rounded corners. */
+@theme {
+  --radius-xs: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
+  --radius-4xl: 0px;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+}
+
+/* React Flow ships rounded controls/minimap/nodes; square them off. */
+.react-flow {
+  --xy-node-border-radius: 0px;
+  --xy-controls-button-border-color: var(--border);
+  --xy-minimap-background-color: var(--card);
+}
+.react-flow__controls,
+.react-flow__controls-button,
+.react-flow__minimap,
+.react-flow__node,
+.react-flow__attribution {
+  border-radius: 0 !important;
+}
+
+/*
+ * Sitemap board. SitemapCanvas publishes --zoom, --label-scale and
+ * --title-scale on the React Flow root; labels counter-scale with them so they
+ * keep a constant on-screen size (like frame names in Figma), and outlines use
+ * --zoom to stay one or two screen pixels wide.
+ */
+.sitemap-board {
+  --zoom: 1;
+  --label-scale: 1;
+  --title-scale: 1;
+  --label-opacity: 1;
+  --full-preview-display: none;
+  --xy-background-color: var(--canvas);
+  background: var(--canvas);
+}
+.sitemap-board .react-flow__node-page,
+.sitemap-board .react-flow__node-section {
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+.sitemap-board .react-flow__node-page {
+  transition: opacity 150ms;
+}
+.sitemap-board .react-flow__node-page.frame-dimmed {
+  opacity: 0.2;
+}
+.frame-label,
+.section-title {
+  position: absolute;
+  left: 0;
+  white-space: nowrap;
+  transform-origin: bottom left;
+}
+.frame-label {
+  bottom: 100%;
+  width: calc(100% / var(--label-scale));
+  transform: scale(var(--label-scale));
+  opacity: var(--label-opacity);
+}
+.section-title {
+  width: max-content;
+  transform: scale(var(--title-scale));
+}
+.frame-full-preview {
+  display: var(--full-preview-display, block);
+}
+.page-frame {
+  box-shadow: 0 0 0 calc(1px / var(--zoom)) oklch(0 0 0 / 0.08), 0 calc(2px / var(--zoom)) calc(8px / var(--zoom)) oklch(0 0 0 / 0.08);
+}
+.page-frame-selected {
+  outline: calc(2px / var(--zoom)) solid var(--frame-selected);
+}
+.react-flow__node-page:hover .page-frame:not(.page-frame-selected),
+.react-flow__node-page.frame-previewed .page-frame:not(.page-frame-selected) {
+  outline: calc(1px / var(--zoom)) solid var(--frame-selected);
+}
+.page-frame-failed {
+  outline: calc(1px / var(--zoom)) solid var(--destructive-foreground);
+}
+.section-box {
+  background: var(--section);
+  border: calc(1px / var(--zoom)) solid var(--section-border);
+}
+.sitemap-board .frame-handle {
+  opacity: 0;
+  pointer-events: none;
+  min-width: 0;
+  min-height: 0;
+  width: 1px;
+  height: 1px;
+  border: 0;
+}
+/* Links never block clicks on the frames underneath them. */
+.sitemap-board .react-flow__edge {
+  pointer-events: none;
+}
+.sitemap-board .react-flow__edge.link-out .react-flow__edge-path {
+  stroke: var(--frame-selected);
+  stroke-width: calc(1.5px / var(--zoom));
+}
+.sitemap-board .react-flow__edge.link-in .react-flow__edge-path {
+  stroke: var(--muted-foreground);
+  stroke-width: calc(1.5px / var(--zoom));
+  stroke-dasharray: calc(6px / var(--zoom)) calc(4px / var(--zoom));
+}
+.sitemap-board .react-flow__edge.link-all .react-flow__edge-path {
+  stroke: var(--muted-foreground);
+  stroke-width: calc(1px / var(--zoom));
+  opacity: 0.35;
+}
