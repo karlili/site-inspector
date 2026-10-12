@@ -61,7 +61,7 @@ export function useBoard(detail: CrawlDetail, viewport: ViewportId, aspect: numb
     const sectionInfo = board.sections.map((section) => {
       const parent = section.parentPageId ? frames.get(section.parentPageId)! : null
       const title = parent
-        ? `Linked from ${parent.number} ${parent.path}`
+        ? parent.path
         : section.id === ROOT_SECTION
           ? section.pageIds.length > 1 ? 'Start pages' : 'Start page'
           : 'Other pages'

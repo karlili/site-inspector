@@ -16,12 +16,13 @@ import {
   type ClaimedJob,
 } from '#/server/crawler/jobs'
 import { parseRobots, type RobotsRules } from '#/server/crawler/robots'
+import { getRunnerSettings } from '#/server/crawler/settings'
 import { SCREENSHOT_DIR } from '#/server/paths'
 
 export interface RunnerOptions {
   db: Db
   id?: string
-  /** Pages this runner captures at once. */
+  /** Pages this runner captures at once. Unset: follow the slots-per-runner setting. */
   concurrency?: number
   screenshotDir?: string
   /** How long an idle slot waits before looking for work again. */
@@ -36,8 +37,10 @@ export interface RunnerOptions {
  */
 export class Runner {
   readonly id: string
-  readonly concurrency: number
   private readonly db: Db
+  /** Set when the slot count was given explicitly rather than taken from settings. */
+  private readonly pinnedConcurrency?: number
+  private targetConcurrency = 0
   private readonly screenshotDir: string
   private readonly pollMs: number
   private readonly heartbeatMs: number
@@ -47,21 +50,27 @@ export class Runner {
   private readonly active = new Set<string>()
   private readonly robots = new Map<string, RobotsRules | undefined>()
   private readonly sleepers = new Set<() => void>()
-  private slots: Promise<void>[] = []
+  private readonly slots = new Map<number, Promise<void>>()
   private heartbeatTimer?: NodeJS.Timeout
   private stopping = false
 
   constructor(options: RunnerOptions) {
     this.db = options.db
     this.id = options.id ?? `${os.hostname()}-${process.pid}-${randomUUID().slice(0, 8)}`
-    this.concurrency = options.concurrency ?? 3
+    this.pinnedConcurrency = options.concurrency
     this.screenshotDir = options.screenshotDir ?? SCREENSHOT_DIR
     this.pollMs = options.pollMs ?? 1000
     this.heartbeatMs = options.heartbeatMs ?? 15_000
     this.log = options.log ?? (() => {})
   }
 
+  /** Pages this runner captures at once. */
+  get concurrency() {
+    return this.targetConcurrency
+  }
+
   async start() {
+    this.targetConcurrency = this.pinnedConcurrency ?? getRunnerSettings(this.db).slotsPerRunner
     registerRunner(this.db, {
       id: this.id,
       hostname: os.hostname(),
@@ -71,14 +80,14 @@ export class Runner {
     await this.getBrowser()
     this.beat()
     this.heartbeatTimer = setInterval(() => this.beat(), this.heartbeatMs)
-    this.slots = Array.from({ length: this.concurrency }, () => this.runSlot())
+    this.resize(this.targetConcurrency)
   }
 
   /** Stop claiming, let in-flight pages finish, then shut down. */
   async stop() {
     this.stopping = true
     for (const wake of this.sleepers) wake()
-    await Promise.all(this.slots)
+    await Promise.all(this.slots.values())
     clearInterval(this.heartbeatTimer)
     removeRunner(this.db, this.id)
     const browser = await this.browser?.catch(() => undefined)
@@ -87,15 +96,34 @@ export class Runner {
 
   private beat() {
     try {
+      if (this.pinnedConcurrency === undefined) {
+        const { slotsPerRunner } = getRunnerSettings(this.db)
+        if (slotsPerRunner !== this.targetConcurrency) {
+          this.log(`slots ${this.targetConcurrency} -> ${slotsPerRunner}`)
+          this.resize(slotsPerRunner)
+        }
+      }
       reapExpiredLeases(this.db)
-      heartbeat(this.db, this.id, [...this.active])
+      heartbeat(this.db, this.id, [...this.active], Date.now(), this.concurrency)
     } catch (err) {
       this.log(`heartbeat failed: ${errorMessage(err)}`)
     }
   }
 
-  private async runSlot() {
-    while (!this.stopping) {
+  /** Start missing slots up to `n`; slots beyond it stop after their current page. */
+  private resize(n: number) {
+    const shrinking = n < this.targetConcurrency
+    this.targetConcurrency = n
+    if (this.stopping) return
+    for (let i = 0; i < n; i++) {
+      if (!this.slots.has(i)) this.slots.set(i, this.runSlot(i))
+    }
+    // Idle slots above the new count can leave now rather than after their nap.
+    if (shrinking) for (const wake of this.sleepers) wake()
+  }
+
+  private async runSlot(index: number) {
+    while (!this.stopping && index < this.targetConcurrency) {
       let job: ClaimedJob | null = null
       try {
         job = claimNextPage(this.db, this.id)
@@ -114,6 +142,8 @@ export class Runner {
         this.active.delete(job.page.id)
       }
     }
+    // No await since the loop check, so resize() can't miss this slot leaving.
+    this.slots.delete(index)
   }
 
   private async process(job: ClaimedJob) {
@@ -129,6 +159,7 @@ export class Runner {
         page,
         robots: page.depth === 0 ? undefined : this.robotsFor(job),
         screenshotDir: this.screenshotDir,
+        navTimeoutMs: job.settings.navTimeoutMs,
         isCancelled: () => !isCrawlActive(this.db, crawl.id),
       })
       kept = completePage(this.db, this.id, job, result)

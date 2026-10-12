@@ -13,7 +13,6 @@ import { fetchRobotsText, parseRobots, type RobotsRules } from './robots'
 import { captureScreenshot } from './screenshot'
 import { isSameSite, looksLikeHtml, normalizeUrl } from './url'
 
-const NAV_TIMEOUT = 30_000
 const USER_AGENT_SUFFIX = 'SiteInspector/1.0'
 
 export class CrawlCancelled extends Error {}
@@ -35,6 +34,8 @@ export interface CaptureOptions {
   /** Rules from the crawl's robots.txt; the root page fetches its own. */
   robots?: RobotsRules
   screenshotDir?: string
+  /** How long each page load may take. */
+  navTimeoutMs?: number
   /** Checked between viewports; returning true throws CrawlCancelled. */
   isCancelled?: () => boolean
 }
@@ -51,6 +52,7 @@ export async function capturePage({
   page: item,
   robots,
   screenshotDir = SCREENSHOT_DIR,
+  navTimeoutMs = 30_000,
   isCancelled = () => false,
 }: CaptureOptions): Promise<PageResult> {
   const result: PageResult = {
@@ -76,7 +78,7 @@ export async function capturePage({
       })
       try {
         const page = await context.newPage()
-        const response = await gotoSettled(page, item.url)
+        const response = await gotoSettled(page, item.url, navTimeoutMs)
 
         if (viewport === primaryViewport) {
           result.httpStatus = response?.status() ?? null
@@ -152,13 +154,13 @@ function androidUserAgent(desktopUserAgent: string, phone: boolean) {
   return phone ? ua.replace(' Safari/', ' Mobile Safari/') : ua
 }
 
-async function gotoSettled(page: Page, url: string): Promise<Response | null> {
+async function gotoSettled(page: Page, url: string, timeout: number): Promise<Response | null> {
   try {
-    return await page.goto(url, { waitUntil: 'networkidle', timeout: NAV_TIMEOUT })
+    return await page.goto(url, { waitUntil: 'networkidle', timeout })
   } catch (err) {
     // Sites with long-polling/analytics never go idle; fall back to the load event.
     if (!/Timeout/i.test(errorMessage(err))) throw err
-    return page.goto(url, { waitUntil: 'load', timeout: NAV_TIMEOUT })
+    return page.goto(url, { waitUntil: 'load', timeout })
   }
 }
 

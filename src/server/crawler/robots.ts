@@ -1,12 +1,15 @@
-/** Minimal robots.txt support: `Disallow`/`Allow` rules for `User-agent: *`. */
+/** Minimal robots.txt support: `Disallow`/`Allow` rules and `Crawl-delay` for `User-agent: *`. */
 export interface RobotsRules {
   isAllowed(url: string): boolean
+  /** How long the site asks crawlers to wait between requests. */
+  crawlDelayMs?: number
 }
 
 const allowAll: RobotsRules = { isAllowed: () => true }
 
 export function parseRobots(text: string): RobotsRules {
   const rules: { allow: boolean; pattern: RegExp; length: number }[] = []
+  let crawlDelayMs: number | undefined
   let applies = false
   let lastWasAgent = false
 
@@ -24,6 +27,11 @@ export function parseRobots(text: string): RobotsRules {
       continue
     }
     lastWasAgent = false
+    if (applies && key === 'crawl-delay') {
+      const seconds = Number(value)
+      if (value && Number.isFinite(seconds) && seconds >= 0) crawlDelayMs = Math.round(seconds * 1000)
+      continue
+    }
     if (!applies || (key !== 'allow' && key !== 'disallow') || !value) continue
 
     const source = value
@@ -33,8 +41,9 @@ export function parseRobots(text: string): RobotsRules {
     rules.push({ allow: key === 'allow', pattern: new RegExp(`^${source}`), length: value.length })
   }
 
-  if (rules.length === 0) return allowAll
+  if (rules.length === 0) return crawlDelayMs === undefined ? allowAll : { ...allowAll, crawlDelayMs }
   return {
+    crawlDelayMs,
     isAllowed(url) {
       const { pathname, search } = new URL(url)
       const target = pathname + search

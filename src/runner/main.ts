@@ -1,9 +1,12 @@
 import { db } from '#/server/db/client'
 import { Runner } from './runner'
 
-/** `pnpm runner`: capture pages from the shared queue until interrupted. */
-const concurrency = Number(process.env.RUNNER_CONCURRENCY ?? 3)
-if (!Number.isInteger(concurrency) || concurrency < 1) {
+/**
+ * `pnpm runner`: capture pages from the shared queue until interrupted.
+ * RUNNER_CONCURRENCY pins its slot count; otherwise it follows the settings page.
+ */
+const concurrency = process.env.RUNNER_CONCURRENCY ? Number(process.env.RUNNER_CONCURRENCY) : undefined
+if (concurrency !== undefined && (!Number.isInteger(concurrency) || concurrency < 1)) {
   console.error('RUNNER_CONCURRENCY must be a positive integer')
   process.exit(1)
 }
@@ -32,4 +35,4 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 }
 
 await runner.start()
-console.log(`[runner ${runner.id}] started with ${concurrency} slots`)
+console.log(`[runner ${runner.id}] started with ${runner.concurrency} slots`)

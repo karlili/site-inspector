@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { and, count, eq, gt, inArray, lt, sql } from 'drizzle-orm'
-import type { CrawlInput } from '#/lib/schemas'
+import type { CrawlInput, RunnerSettings } from '#/lib/schemas'
 import type { ViewportId } from '#/lib/viewports'
 import type { Db } from '../db/client'
 import { crawls, links, pages, runners, screenshots, type Crawl, type Page } from '../db/schema'
+import { parseRobots } from './robots'
 import type { CapturedScreenshot } from './screenshot'
+import { getRunnerSettings } from './settings'
 
 /**
  * The crawl queue lives in SQLite: every `pages` row is a job. Runners (any
@@ -17,8 +19,8 @@ import type { CapturedScreenshot } from './screenshot'
 export const LEASE_MS = 60_000
 /** Claims that expire this many times are given up on. */
 export const MAX_ATTEMPTS = 3
-/** Pages of one crawl being captured at once, across all runners. */
-export const MAX_IN_FLIGHT_PER_CRAWL = 6
+/** Longest robots.txt Crawl-delay we'll honor; some sites ask for minutes. */
+export const MAX_CRAWL_DELAY_MS = 60_000
 /** Runners not heard from in this long are considered offline. */
 export const RUNNER_OFFLINE_MS = 30_000
 
@@ -28,6 +30,8 @@ const OPEN_PAGE = ['pending', 'running'] as const
 export interface ClaimedJob {
   page: Page
   crawl: Crawl
+  /** The settings in force when the page was claimed. */
+  settings: RunnerSettings
 }
 
 export interface PageResult {
@@ -73,20 +77,24 @@ export function createCrawl(
  * Claim the next page to capture, or null if nothing is ready. Within a crawl,
  * pages are only handed out once every shallower page has finished, so a page's
  * parent is always one of its shallowest linkers (same as a level-by-level BFS).
+ * Each claim also holds the crawl's next one back by the fetch delay, so a site
+ * sees page loads spaced out however many runners are working on it.
  */
 export function claimNextPage(db: Db, runnerId: string, now = Date.now()): ClaimedJob | null {
   return db.transaction(
     (tx) => {
+      const settings = getRunnerSettings(tx)
       const candidate = tx.get<{ id: string } | undefined>(sql`
         select p.id from pages p join crawls c on c.id = p.crawl_id
         where p.status = 'pending' and c.status in ('queued', 'running')
+          and (c.next_fetch_at is null or c.next_fetch_at <= ${now})
           and not exists (
             select 1 from pages q
             where q.crawl_id = p.crawl_id and q.status in ('pending', 'running') and q.depth < p.depth
           )
           and (
             select count(*) from pages r where r.crawl_id = p.crawl_id and r.status = 'running'
-          ) < ${MAX_IN_FLIGHT_PER_CRAWL}
+          ) < ${settings.maxInFlightPerCrawl}
         order by c.created_at, c.rowid, p.depth, p.rowid
         limit 1`)
       if (!candidate) return null
@@ -102,12 +110,25 @@ export function claimNextPage(db: Db, runnerId: string, now = Date.now()): Claim
         .where(eq(pages.id, candidate.id))
         .returning()
         .get()
-      tx.update(crawls)
-        .set({ status: 'running' })
-        .where(and(eq(crawls.id, page.crawlId), eq(crawls.status, 'queued')))
-        .run()
-      const crawl = tx.select().from(crawls).where(eq(crawls.id, page.crawlId)).get()!
-      return { page, crawl }
+      const { crawlDelayMs } = tx
+        .select({ crawlDelayMs: crawls.crawlDelayMs })
+        .from(crawls)
+        .where(eq(crawls.id, page.crawlId))
+        .get()!
+      const delay = Math.max(
+        settings.fetchDelayMs,
+        settings.honorCrawlDelay ? (crawlDelayMs ?? 0) : 0,
+      )
+      const crawl = tx
+        .update(crawls)
+        .set({
+          status: sql`case when ${crawls.status} = 'queued' then 'running' else ${crawls.status} end`,
+          nextFetchAt: new Date(now + delay),
+        })
+        .where(eq(crawls.id, page.crawlId))
+        .returning()
+        .get()!
+      return { page, crawl, settings }
     },
     { behavior: 'immediate' },
   )
@@ -153,8 +174,14 @@ export function completePage(
       }
 
       if (page.depth === 0 && result.hostname) {
+        const crawlDelayMs = result.robotsTxt ? parseRobots(result.robotsTxt).crawlDelayMs : undefined
         tx.update(crawls)
-          .set({ hostname: result.hostname, robotsTxt: result.robotsTxt ?? null })
+          .set({
+            hostname: result.hostname,
+            robotsTxt: result.robotsTxt ?? null,
+            crawlDelayMs:
+              crawlDelayMs === undefined ? null : Math.min(crawlDelayMs, MAX_CRAWL_DELAY_MS),
+          })
           .where(eq(crawls.id, crawl.id))
           .run()
       }
@@ -212,7 +239,13 @@ export function completePage(
 }
 
 /** Keep this runner's claims alive and record that it's still around. */
-export function heartbeat(db: Db, runnerId: string, pageIds: string[], now = Date.now()) {
+export function heartbeat(
+  db: Db,
+  runnerId: string,
+  pageIds: string[],
+  now = Date.now(),
+  concurrency?: number,
+) {
   db.transaction(
     (tx) => {
       if (pageIds.length > 0) {
@@ -228,7 +261,7 @@ export function heartbeat(db: Db, runnerId: string, pageIds: string[], now = Dat
           .run()
       }
       tx.update(runners)
-        .set({ lastSeenAt: new Date(now), activeJobs: pageIds.length })
+        .set({ lastSeenAt: new Date(now), activeJobs: pageIds.length, concurrency })
         .where(eq(runners.id, runnerId))
         .run()
     },

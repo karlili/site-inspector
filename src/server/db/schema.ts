@@ -23,6 +23,10 @@ export const crawls = sqliteTable('crawls', {
   pageCount: integer('page_count').notNull().default(0),
   /** Fetched by the root page's job; null means no rules (allow everything). */
   robotsTxt: text('robots_txt'),
+  /** The robots.txt Crawl-delay, if it set one. */
+  crawlDelayMs: integer('crawl_delay_ms'),
+  /** The earliest a runner may start loading this crawl's next page. */
+  nextFetchAt: integer('next_fetch_at', { mode: 'timestamp_ms' }),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
@@ -99,6 +103,13 @@ export const runners = sqliteTable('runners', {
   activeJobs: integer('active_jobs').notNull().default(0),
   startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
   lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+})
+
+/** Admin-editable settings, one JSON value per key (e.g. 'runner'). */
+export const settings = sqliteTable('settings', {
+  key: text().primaryKey(),
+  value: text({ mode: 'json' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
 })
 
 export const crawlsRelations = relations(crawls, ({ many }) => ({

@@ -1,5 +1,14 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronRight, CircleAlert, CornerDownRight, Loader2, Search } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  CircleAlert,
+  CornerDownRight,
+  Loader2,
+  Search,
+} from 'lucide-react'
+import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import type { CrawlDetail } from '#/lib/queries'
 import { isPageOpen } from '#/lib/schemas'
@@ -71,7 +80,22 @@ export function LayersPanel({
     return byTarget
   }, [links, board.numbers])
 
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
+  // Start pages are open and every page below them closed, unless everything was
+  // expanded; `toggled` holds the pages flipped from that by hand. Pages that
+  // arrive while the crawl runs follow the same rule.
+  const [allExpanded, setAllExpanded] = useState(false)
+  const [toggled, setToggled] = useState<Set<string>>(() => new Set())
+  const rootIds = useMemo(() => new Set(roots), [roots])
+  const isExpanded = useCallback(
+    (id: string) => (allExpanded || rootIds.has(id)) !== toggled.has(id),
+    [allExpanded, rootIds, toggled],
+  )
+  // "Collapse all" goes back to the start: only the start pages open.
+  const anyOpenBelowStart = allExpanded || [...toggled].some((id) => !rootIds.has(id))
+  const setAll = (expand: boolean) => {
+    setAllExpanded(expand)
+    setToggled(new Set())
+  }
   const [openRefs, setOpenRefs] = useState<Set<string>>(() => new Set())
   const toggle = (set: Set<string>, id: string) => {
     const next = new Set(set)
@@ -101,28 +125,36 @@ export function LayersPanel({
           for (const refId of refs) rows.push({ kind: 'ref', id, refId, depth: depth + 1 })
         }
         const kids = childrenOf.get(id)
-        if (kids && (visible || !collapsed.has(id))) walk(kids, depth + 1)
+        if (kids && (visible || isExpanded(id))) walk(kids, depth + 1)
       }
     }
     walk(roots, 0)
     return rows
-  }, [roots, childrenOf, referrers, visible, collapsed, openRefs])
+  }, [roots, childrenOf, referrers, visible, isExpanded, openRefs])
 
   // Reveal the selected page (it may be inside a collapsed branch), then scroll to it.
   const rowEls = useRef(new Map<string, HTMLElement>())
   const pendingScroll = useRef<string | null>(null)
+  // Only on a new selection, so collapsing afterwards isn't undone.
+  const revealed = useRef<string | null>(null)
   useEffect(() => {
+    if (selectedPageId === revealed.current) return
+    revealed.current = selectedPageId
     if (!selectedPageId) return
     pendingScroll.current = selectedPageId
-    setCollapsed((prev) => {
-      const ancestors: string[] = []
-      for (let at = parentOf.get(selectedPageId); at; at = parentOf.get(at)) ancestors.push(at)
-      if (!ancestors.some((id) => prev.has(id))) return prev
+    const closed: string[] = []
+    for (let at = parentOf.get(selectedPageId); at; at = parentOf.get(at)) {
+      if (!isExpanded(at)) closed.push(at)
+    }
+    if (closed.length === 0) return
+    setToggled((prev) => {
       const next = new Set(prev)
-      for (const id of ancestors) next.delete(id)
+      for (const id of closed) {
+        if (!next.delete(id)) next.add(id)
+      }
       return next
     })
-  }, [selectedPageId, parentOf])
+  }, [selectedPageId, parentOf, isExpanded])
   useLayoutEffect(() => {
     const id = pendingScroll.current
     const el = id && rowEls.current.get(id)
@@ -152,8 +184,8 @@ export function LayersPanel({
 
   return (
     <aside className="bg-card flex h-full flex-col" aria-label="Pages">
-      <div className="border-b p-2">
-        <div className="relative">
+      <div className="flex gap-1.5 border-b p-2">
+        <div className="relative min-w-0 flex-1">
           <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
           <Input
             type="search"
@@ -164,6 +196,16 @@ export function LayersPanel({
             aria-label="Search pages"
           />
         </div>
+        <Button
+          variant="outline"
+          size="icon-sm"
+          onClick={() => setAll(!anyOpenBelowStart)}
+          disabled={!!visible}
+          title={anyOpenBelowStart ? 'Collapse all' : 'Expand all'}
+          aria-label={anyOpenBelowStart ? 'Collapse all' : 'Expand all'}
+        >
+          {anyOpenBelowStart ? <ChevronsDownUp /> : <ChevronsUpDown />}
+        </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto py-1 text-sm" role="tree" aria-label="Pages by the page that first linked to them">
         {rows.length === 0 && (
@@ -206,7 +248,7 @@ export function LayersPanel({
           const { page } = frame
           const selected = id === selectedPageId
           const kids = childrenOf.get(id)
-          const expanded = kids ? !!visible || !collapsed.has(id) : undefined
+          const expanded = kids ? !!visible || isExpanded(id) : undefined
           const refCount = referrers.get(id)?.length ?? 0
           const dimmed = matches && !matches.has(id)
           return (
@@ -221,7 +263,7 @@ export function LayersPanel({
               aria-expanded={expanded}
               aria-selected={selected}
               className={cn(
-                'group/row hover:bg-accent flex items-start',
+                'group/row hover:bg-accent flex items-start pr-3',
                 selected && 'bg-frame-selected/15 hover:bg-frame-selected/20',
               )}
               style={pad}
@@ -230,7 +272,7 @@ export function LayersPanel({
               {kids ? (
                 <button
                   type="button"
-                  onClick={() => setCollapsed((prev) => toggle(prev, id))}
+                  onClick={() => setToggled((prev) => toggle(prev, id))}
                   disabled={!!visible}
                   className="text-muted-foreground hover:text-foreground mt-1 flex size-4 shrink-0 items-center justify-center disabled:opacity-50"
                   aria-label={`${expanded ? 'Collapse' : 'Expand'} ${kids.length} linked pages`}
@@ -253,9 +295,11 @@ export function LayersPanel({
                   <span className="block truncate">{page.title || frame.path}</span>
                   <span className="text-muted-foreground block truncate font-mono text-[11px]">{frame.path}</span>
                 </span>
-                {isPageOpen(page.status) && <Loader2 className="text-muted-foreground mt-0.5 size-3.5 shrink-0 animate-spin" />}
+                {isPageOpen(page.status) && (
+                  <Loader2 className="text-muted-foreground mt-[3px] size-3.5 shrink-0 animate-spin" aria-label="Loading" />
+                )}
                 {page.status === 'failed' && (
-                  <CircleAlert className="text-destructive-foreground mt-0.5 size-3.5 shrink-0" aria-label="Failed" />
+                  <CircleAlert className="text-destructive-foreground mt-[3px] size-3.5 shrink-0" aria-label="Failed" />
                 )}
                 {page.httpStatus != null && page.httpStatus >= 400 && (
                   <span className="bg-destructive mt-0.5 shrink-0 px-1 text-[10px] text-white">{page.httpStatus}</span>
@@ -266,7 +310,7 @@ export function LayersPanel({
                   type="button"
                   onClick={() => setOpenRefs((prev) => toggle(prev, id))}
                   className={cn(
-                    'text-muted-foreground hover:text-foreground mt-0.5 mr-2 shrink-0 border px-1 text-[10px] tabular-nums',
+                    'text-muted-foreground hover:text-foreground mt-0.5 ml-2 shrink-0 border px-1 text-[10px] tabular-nums',
                     openRefs.has(id) ? 'border-border bg-background' : 'border-transparent',
                   )}
                   aria-expanded={openRefs.has(id)}

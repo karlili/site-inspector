@@ -11,14 +11,21 @@ process.env.DATA_DIR = tmp
 process.env.DATABASE_URL = path.join(tmp, 'test.db')
 
 const { db, openDb } = await import('../db/client')
-const { crawls, links, pages } = await import('../db/schema')
+const { crawls, links, pages, settings } = await import('../db/schema')
 const jobs = await import('./jobs')
-const { LEASE_MS, MAX_ATTEMPTS, MAX_IN_FLIGHT_PER_CRAWL } = jobs
+const { getRunnerSettings, saveRunnerSettings } = await import('./settings')
+const { DEFAULT_RUNNER_SETTINGS } = await import('#/lib/schemas')
+const { LEASE_MS, MAX_ATTEMPTS } = jobs
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
 
+/** Override some runner settings; tests run without a fetch delay unless they set one. */
+const configure = (overrides: Partial<typeof DEFAULT_RUNNER_SETTINGS> = {}) =>
+  saveRunnerSettings(db, { ...DEFAULT_RUNNER_SETTINGS, fetchDelayMs: 0, ...overrides })
+
 beforeEach(() => {
   db.delete(crawls).run()
+  configure()
 })
 
 const ROOT = 'https://example.test/'
@@ -92,7 +99,70 @@ describe('crawl job queue', () => {
       const job = jobs.claimNextPage(i % 2 ? db : other, `r${i % 2}`)
       if (job) claimed.push(job)
     }
-    expect(claimed).toHaveLength(MAX_IN_FLIGHT_PER_CRAWL)
+    expect(claimed).toHaveLength(DEFAULT_RUNNER_SETTINGS.maxInFlightPerCrawl)
+  })
+
+  it('takes the in-flight limit from settings', () => {
+    configure({ maxInFlightPerCrawl: 2 })
+    newCrawl()
+    finishRoot('r', Array.from({ length: 10 }, (_, i) => url(`/p${i}`)))
+    const claimed = Array.from({ length: 10 }, () => jobs.claimNextPage(db, 'r')).filter(Boolean)
+    expect(claimed).toHaveLength(2)
+    expect(claimed[0]!.settings.maxInFlightPerCrawl).toBe(2)
+  })
+
+  it('spaces out page loads of a crawl by the fetch delay', () => {
+    configure({ fetchDelayMs: 2000 })
+    const crawlId = newCrawl()
+    const t = Date.now()
+    const root = jobs.claimNextPage(db, 'r', t)!
+    expect(jobs.completePage(db, 'r', root, result([url('/a'), url('/b')]))).toBe(true)
+
+    // The root finished early, but its children wait out the delay...
+    expect(jobs.claimNextPage(db, 'r', t + 1999)).toBeNull()
+    // ...while another crawl isn't held up by it.
+    const other = newCrawl()
+    expect(jobs.claimNextPage(db, 'r', t + 1999)!.crawl.id).toBe(other)
+
+    const a = jobs.claimNextPage(db, 'r', t + 2000)!
+    expect(a.crawl.id).toBe(crawlId)
+    expect(a.crawl.nextFetchAt).toEqual(new Date(t + 4000))
+    // Spaced from the last claim even while that page is still loading.
+    expect(jobs.claimNextPage(db, 'r', t + 3999)).toBeNull()
+    expect(jobs.claimNextPage(db, 'r', t + 4000)!.page.url).toBe(url('/b'))
+  })
+
+  it.each([true, false])('uses a longer robots.txt Crawl-delay when honoring it is %s', (honor) => {
+    configure({ fetchDelayMs: 1000, honorCrawlDelay: honor })
+    const crawlId = newCrawl()
+    const t = Date.now()
+    const root = jobs.claimNextPage(db, 'r', t)!
+    jobs.completePage(db, 'r', root, {
+      ...result([url('/a'), url('/b')]),
+      hostname: 'example.test',
+      robotsTxt: 'User-agent: *\nCrawl-delay: 5',
+    })
+    expect(crawlRow(crawlId).crawlDelayMs).toBe(5000)
+
+    expect(jobs.claimNextPage(db, 'r', t + 1000)).not.toBeNull()
+    const next = jobs.claimNextPage(db, 'r', t + 2000)
+    if (honor) {
+      expect(next).toBeNull()
+      expect(jobs.claimNextPage(db, 'r', t + 6000)).not.toBeNull()
+    } else {
+      expect(next).not.toBeNull()
+    }
+  })
+
+  it('caps the Crawl-delay it will wait for', () => {
+    const crawlId = newCrawl()
+    const root = jobs.claimNextPage(db, 'r')!
+    jobs.completePage(db, 'r', root, {
+      ...result(),
+      hostname: 'example.test',
+      robotsTxt: 'User-agent: *\nCrawl-delay: 3600',
+    })
+    expect(crawlRow(crawlId).crawlDelayMs).toBe(jobs.MAX_CRAWL_DELAY_MS)
   })
 
   it('finishes a depth level before handing out the next', () => {
@@ -175,5 +245,20 @@ describe('crawl job queue', () => {
     expect(jobs.claimNextPage(db, 'r')!.crawl.id).toBe(first)
     // The first crawl is blocked on its root, so a free slot moves on to the next one.
     expect(jobs.claimNextPage(db, 'r')!.crawl.id).toBe(second)
+  })
+})
+
+describe('runner settings', () => {
+  it('falls back to defaults when nothing valid is stored', () => {
+    db.delete(settings).run()
+    expect(getRunnerSettings(db)).toEqual(DEFAULT_RUNNER_SETTINGS)
+
+    db.insert(settings)
+      .values({ key: 'runner', value: { fetchDelayMs: -5 }, updatedAt: new Date() })
+      .run()
+    expect(getRunnerSettings(db)).toEqual(DEFAULT_RUNNER_SETTINGS)
+
+    configure({ fetchDelayMs: 2500, slotsPerRunner: 8 })
+    expect(getRunnerSettings(db)).toMatchObject({ fetchDelayMs: 2500, slotsPerRunner: 8 })
   })
 })

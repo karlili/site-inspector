@@ -31,6 +31,21 @@ export const nodePositionsSchema = z.object({
     .max(5000),
 })
 
+/** How runners behave; edited on the settings page and read by every runner live. */
+export const runnerSettingsSchema = z.object({
+  /** Minimum time between starting two page loads of the same crawl, across all runners. */
+  fetchDelayMs: z.number().int().min(0).max(60_000).default(1000),
+  /** Pages of one crawl being captured at once, across all runners. */
+  maxInFlightPerCrawl: z.number().int().min(1).max(50).default(6),
+  /** Pages each runner captures at once, unless it was started with RUNNER_CONCURRENCY. */
+  slotsPerRunner: z.number().int().min(1).max(32).default(3),
+  navTimeoutMs: z.number().int().min(5_000).max(120_000).default(30_000),
+  /** Wait at least as long as the site's robots.txt Crawl-delay asks for. */
+  honorCrawlDelay: z.boolean().default(true),
+})
+export type RunnerSettings = z.infer<typeof runnerSettingsSchema>
+export const DEFAULT_RUNNER_SETTINGS = runnerSettingsSchema.parse({})
+
 export const crawlStatuses = ['queued', 'running', 'done', 'failed', 'cancelled'] as const
 export type CrawlStatus = (typeof crawlStatuses)[number]
 

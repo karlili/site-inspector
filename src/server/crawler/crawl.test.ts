@@ -63,8 +63,11 @@ afterAll(() => {
 async function crawlSite(maxDepth: number, viewports: ('mobile' | 'desktop')[]) {
   const { db, openDb } = await import('../db/client')
   const { createCrawl } = await import('./jobs')
+  const { saveRunnerSettings } = await import('./settings')
+  const { DEFAULT_RUNNER_SETTINGS } = await import('#/lib/schemas')
   const { Runner } = await import('#/runner/runner')
   const { getCrawl } = await loadDetail()
+  saveRunnerSettings(db, { ...DEFAULT_RUNNER_SETTINGS, fetchDelayMs: 0 })
   const id = createCrawl(db, {
     rootUrl: `${baseUrl}/`,
     maxDepth,
@@ -150,6 +153,31 @@ describe('runCrawl', () => {
     expect([...byPath.keys()].sort()).toEqual(['/', '/a', '/a/deep', '/a/deeper', '/b', '/missing'])
     expect(byPath.get('/a/deeper')?.depth).toBe(3)
     expect(byPath.get('/missing')?.httpStatus).toBe(404)
+  })
+})
+
+describe('runner slots', () => {
+  it('follows the slots-per-runner setting while running', async () => {
+    const { db, openDb } = await import('../db/client')
+    const { listOnlineRunners } = await import('./jobs')
+    const { saveRunnerSettings } = await import('./settings')
+    const { DEFAULT_RUNNER_SETTINGS } = await import('#/lib/schemas')
+    const { Runner } = await import('#/runner/runner')
+    const slots = () => listOnlineRunners(db).find((r) => r.id === 'resizing')?.concurrency
+
+    saveRunnerSettings(db, { ...DEFAULT_RUNNER_SETTINGS, slotsPerRunner: 2 })
+    const runner = new Runner({ db: openDb(), id: 'resizing', pollMs: 50, heartbeatMs: 50 })
+    await runner.start()
+    try {
+      expect(runner.concurrency).toBe(2)
+      expect(slots()).toBe(2)
+      saveRunnerSettings(db, { ...DEFAULT_RUNNER_SETTINGS, slotsPerRunner: 4 })
+      await expect.poll(slots, { timeout: 5000, interval: 50 }).toBe(4)
+      saveRunnerSettings(db, { ...DEFAULT_RUNNER_SETTINGS, slotsPerRunner: 1 })
+      await expect.poll(slots, { timeout: 5000, interval: 50 }).toBe(1)
+    } finally {
+      await runner.stop()
+    }
   })
 })
 

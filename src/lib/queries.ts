@@ -1,5 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import { getCrawl, listCrawls, listRunners } from '#/server/functions/crawls'
+import { getSettings } from '#/server/functions/settings'
 import type { CrawlStatus } from './schemas'
 
 export const isActive = (status: CrawlStatus) => status === 'queued' || status === 'running'
@@ -27,6 +28,12 @@ export const runnersQuery = () =>
     queryKey: ['runners'],
     queryFn: () => listRunners(),
     refetchInterval: 5000,
+  })
+
+export const runnerSettingsQuery = () =>
+  queryOptions({
+    queryKey: ['settings', 'runner'],
+    queryFn: () => getSettings(),
   })
 
 export type CrawlDetail = Awaited<ReturnType<typeof getCrawl>>
