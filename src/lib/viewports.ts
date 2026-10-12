@@ -1,8 +1,11 @@
 export const VIEWPORTS = {
+  // width/height: the device's CSS viewport. deviceScaleFactor: its pixel ratio, so
+  // srcset and resolution media queries pick what a real device would (captures
+  // are still stored at CSS-pixel size).
   // frameWidth: how wide a page frame is drawn on the sitemap board, in board units.
-  mobile: { label: 'Mobile', width: 375, height: 812, frameWidth: 150 },
-  tablet: { label: 'Tablet', width: 768, height: 1024, frameWidth: 230 },
-  desktop: { label: 'Desktop', width: 1440, height: 900, frameWidth: 288 },
+  mobile: { label: 'Mobile', width: 375, height: 812, deviceScaleFactor: 3, frameWidth: 150 },
+  tablet: { label: 'Tablet', width: 768, height: 1024, deviceScaleFactor: 2, frameWidth: 230 },
+  desktop: { label: 'Desktop', width: 1440, height: 900, deviceScaleFactor: 1, frameWidth: 288 },
 } as const
 
 export type ViewportId = keyof typeof VIEWPORTS

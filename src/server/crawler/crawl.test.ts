@@ -5,15 +5,22 @@ import path from 'node:path'
 import type { AddressInfo } from 'node:net'
 import sharp from 'sharp'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { MAX_FRAME_HEIGHT, VIEWPORTS, previewPath } from '#/lib/viewports'
+import { MAX_FRAME_HEIGHT, VIEWPORTS, previewPath, type ViewportId } from '#/lib/viewports'
 
 // Isolate the database and screenshots from the dev data directory.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'site-inspector-test-'))
 process.env.DATA_DIR = tmp
 process.env.DATABASE_URL = path.join(tmp, 'test.db')
 
-const html = (title: string, body: string) =>
-  `<!doctype html><html><head><title>${title}</title></head><body style="height:1600px"><h1>${title}</h1>${body}</body></html>`
+const html = (title: string, body: string, viewport = 'width=device-width, initial-scale=1') =>
+  `<!doctype html><html><head><meta name="viewport" content="${viewport}"><title>${title}</title></head><body style="height:1600px"><h1>${title}</h1>${body}</body></html>`
+
+// Not linked from the site; fetched directly by the device emulation test.
+// /sniff serves its responsive layout only to phone user agents, like Wikipedia does.
+const devicePages: Record<string, (userAgent: string) => string> = {
+  '/sniff': (ua) => (/Mobile/.test(ua) ? html('Sniff', '') : html('Sniff', '', 'width=1120')),
+  '/fixed': () => html('Fixed', '', 'width=1120'),
+}
 
 // / -> /a, /b, external, pdf ; /a -> /a/deep ; /a/deep -> /a/deeper ; /b -> / , /missing
 const site: Record<string, string> = {
@@ -39,7 +46,7 @@ beforeAll(async () => {
       res.writeHead(200, { 'content-type': 'text/plain' }).end('User-agent: *\nDisallow: /private')
       return
     }
-    const body = site[url.pathname]
+    const body = site[url.pathname] ?? devicePages[url.pathname]?.(req.headers['user-agent'] ?? '')
     res
       .writeHead(body ? 200 : 404, { 'content-type': 'text/html' })
       .end(body ?? html('Not found', ''))
@@ -143,5 +150,65 @@ describe('runCrawl', () => {
     expect([...byPath.keys()].sort()).toEqual(['/', '/a', '/a/deep', '/a/deeper', '/b', '/missing'])
     expect(byPath.get('/a/deeper')?.depth).toBe(3)
     expect(byPath.get('/missing')?.httpStatus).toBe(404)
+  })
+})
+
+describe('device emulation', () => {
+  it('loads pages as a phone or tablet would and fits wide layouts to the screen', async () => {
+    const { deviceOptions, launchBrowser } = await import('./crawl')
+    const { captureScreenshot } = await import('./screenshot')
+    const { browser, userAgent } = await launchBrowser()
+    const capture = async (viewport: ViewportId, pathname: string) => {
+      const context = await browser.newContext(deviceOptions(viewport, userAgent))
+      try {
+        const page = await context.newPage()
+        await page.goto(`${baseUrl}${pathname}`)
+        const seen = await page.evaluate(() => ({
+          userAgent: navigator.userAgent,
+          layoutWidth: window.innerWidth,
+          pixelRatio: window.devicePixelRatio,
+        }))
+        const name = `${viewport}${pathname.replace('/', '-')}`
+        const shot = await captureScreenshot(page, viewport, path.join(tmp, 'screenshots'), 'devices', name)
+        const image = await sharp(path.join(tmp, 'screenshots', shot.filePath)).metadata()
+        return { seen, shot, image }
+      } finally {
+        await context.close()
+      }
+    }
+
+    try {
+      // A phone gets the responsive layout, rendered at its pixel ratio but stored at CSS size.
+      const phone = await capture('mobile', '/sniff')
+      expect(phone.seen).toEqual({
+        userAgent: expect.stringMatching(/Android.*Mobile Safari/),
+        layoutWidth: 375,
+        pixelRatio: 3,
+      })
+      const pageHeight = phone.shot.height
+      expect(pageHeight).toBeGreaterThanOrEqual(1600)
+      expect(phone.shot.width).toBe(375)
+      expect(phone.image).toMatchObject({ width: 375, height: pageHeight })
+
+      // A tablet isn't sniffed as mobile, so it gets the 1120px layout, zoomed out to fit.
+      const tablet = await capture('tablet', '/sniff')
+      expect(tablet.seen.userAgent).toMatch(/Android/)
+      expect(tablet.seen.userAgent).not.toMatch(/Mobile/)
+      expect(tablet.seen.layoutWidth).toBe(1120)
+      expect(tablet.shot).toMatchObject({ width: 768, height: Math.round((pageHeight * 768) / 1120) })
+      expect(tablet.image).toMatchObject({ width: 768, height: tablet.shot.height })
+
+      // A fixed-width page on a phone shows whole, not its left-hand third.
+      const fixed = await capture('mobile', '/fixed')
+      expect(fixed.seen.layoutWidth).toBe(1120)
+      // Never shorter than one screen.
+      expect(fixed.shot).toMatchObject({ width: 375, height: 812 })
+
+      const desktop = await capture('desktop', '/sniff')
+      expect(desktop.seen.userAgent).not.toMatch(/Android|Mobile/)
+      expect(desktop.shot.width).toBe(1440)
+    } finally {
+      await browser.close()
+    }
   })
 })

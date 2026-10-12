@@ -43,23 +43,38 @@ export async function captureScreenshot(
   await autoScroll(page)
   await page.waitForTimeout(300)
 
-  const fullHeight = await page.evaluate(() =>
-    Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight ?? 0),
-  )
+  // On touch devices a page without a device-width viewport meta lays out wider
+  // than the screen (980px by default) and the device zooms out to show all of it.
+  const { layoutWidth, fullHeight } = await page.evaluate(() => ({
+    layoutWidth: window.innerWidth,
+    fullHeight: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight ?? 0),
+  }))
   const { width, height: viewportHeight } = VIEWPORTS[viewport]
-  const height = Math.min(Math.max(fullHeight, viewportHeight), MAX_CAPTURE_HEIGHT)
+  const captureWidth = Math.max(width, layoutWidth)
+  const zoom = width / captureWidth
+  const captureHeight = Math.min(
+    Math.max(fullHeight, Math.ceil(viewportHeight / zoom)),
+    MAX_CAPTURE_HEIGHT,
+  )
+  const height = Math.round(captureHeight * zoom)
 
   await fs.mkdir(path.join(rootDir, relDir), { recursive: true })
   const filePath = path.posix.join(relDir, `${baseName}-${viewport}.jpg`)
   const thumbPath = path.posix.join(relDir, `${baseName}-${viewport}.thumb.webp`)
 
-  const buffer = await page.screenshot({
-    type: 'jpeg',
-    quality: 82,
+  const zoomedOut = captureWidth > width
+  const shot = await page.screenshot({
+    // Lossless when it will be resized, so the JPEG is only encoded once.
+    ...(zoomedOut ? { type: 'png' } : { type: 'jpeg', quality: 82 }),
     fullPage: true,
-    clip: { x: 0, y: 0, width, height },
+    clip: { x: 0, y: 0, width: captureWidth, height: captureHeight },
     animations: 'disabled',
+    // Stored at CSS-pixel size whatever the device pixel ratio.
+    scale: 'css',
   })
+  const buffer = zoomedOut
+    ? await sharp(shot).resize({ width, height, fit: 'fill' }).jpeg({ quality: 82 }).toBuffer()
+    : shot
   await fs.writeFile(path.join(rootDir, filePath), buffer)
 
   // Thumbnail shows the first screen of the page at the viewport's aspect ratio.

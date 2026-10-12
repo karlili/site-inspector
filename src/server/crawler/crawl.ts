@@ -1,5 +1,11 @@
-import { chromium, type Browser, type Page, type Response } from 'playwright'
-import { VIEWPORTS } from '#/lib/viewports'
+import {
+  chromium,
+  type Browser,
+  type BrowserContextOptions,
+  type Page,
+  type Response,
+} from 'playwright'
+import { VIEWPORTS, type ViewportId } from '#/lib/viewports'
 import type { Crawl, Page as PageRow } from '../db/schema'
 import { SCREENSHOT_DIR } from '../paths'
 import type { PageResult } from './jobs'
@@ -64,12 +70,8 @@ export async function capturePage({
   try {
     for (const viewport of crawl.viewports) {
       if (isCancelled()) throw new CrawlCancelled()
-      const { width, height } = VIEWPORTS[viewport]
       const context = await browser.newContext({
-        viewport: { width, height },
-        userAgent,
-        isMobile: viewport === 'mobile',
-        hasTouch: viewport !== 'desktop',
+        ...deviceOptions(viewport, userAgent),
         ignoreHTTPSErrors: true,
       })
       try {
@@ -122,6 +124,32 @@ export async function capturePage({
     result.error = errorMessage(err)
   }
   return result
+}
+
+/**
+ * Emulate the device each viewport stands for: desktop Chrome, or Chrome for
+ * Android on a phone or tablet. The user agent matters as much as the size:
+ * many sites (Wikipedia among them) pick their mobile layout by user agent and
+ * otherwise serve desktop HTML with a fixed-width viewport meta tag.
+ */
+export function deviceOptions(viewport: ViewportId, desktopUserAgent: string): BrowserContextOptions {
+  const { width, height, deviceScaleFactor } = VIEWPORTS[viewport]
+  const touch = viewport !== 'desktop'
+  return {
+    viewport: { width, height },
+    screen: { width, height },
+    deviceScaleFactor,
+    // Phones and tablets both honour <meta name="viewport">.
+    isMobile: touch,
+    hasTouch: touch,
+    userAgent: touch ? androidUserAgent(desktopUserAgent, viewport === 'mobile') : desktopUserAgent,
+  }
+}
+
+/** Same Chrome version, Android platform; tablets drop the "Mobile" token, as Chrome does. */
+function androidUserAgent(desktopUserAgent: string, phone: boolean) {
+  const ua = desktopUserAgent.replace(/\([^)]*\)/, '(Linux; Android 10; K)')
+  return phone ? ua.replace(' Safari/', ' Mobile Safari/') : ua
 }
 
 async function gotoSettled(page: Page, url: string): Promise<Response | null> {
