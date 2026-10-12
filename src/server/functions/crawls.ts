@@ -7,6 +7,7 @@ import {
   crawlInputSchema,
   expandPageSchema,
   pageRefSchema,
+  renameCrawlSchema,
 } from '#/lib/schemas'
 import { db } from '../db/client'
 import { crawls, links, pages, screenshots } from '../db/schema'
@@ -28,6 +29,7 @@ export const startCrawl = createServerFn({ method: 'POST' })
     if (!rootUrl) throw new Error('Invalid URL')
     // Runners pick the root page up from the database; nothing runs in this process.
     const id = createCrawl(db, {
+      name: data.name,
       rootUrl,
       maxDepth: data.maxDepth,
       maxPages: data.maxPages,
@@ -35,6 +37,19 @@ export const startCrawl = createServerFn({ method: 'POST' })
       respectRobots: data.respectRobots,
     })
     return { id }
+  })
+
+export const renameCrawl = createServerFn({ method: 'POST' })
+  .validator(renameCrawlSchema)
+  .handler(async ({ data }) => {
+    const renamed = db
+      .update(crawls)
+      .set({ name: data.name })
+      .where(eq(crawls.id, data.crawlId))
+      .returning({ name: crawls.name })
+      .get()
+    if (!renamed) throw new Error('Crawl not found')
+    return renamed
   })
 
 export const listCrawls = createServerFn({ method: 'GET' }).handler(async () => {

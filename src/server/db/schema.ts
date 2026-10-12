@@ -12,6 +12,8 @@ import type { ViewportId } from '#/lib/viewports'
 
 export const crawls = sqliteTable('crawls', {
   id: text().primaryKey(),
+  /** Set by the user; null shows the crawl by its start URL. */
+  name: text(),
   rootUrl: text('root_url').notNull(),
   hostname: text().notNull(),
   maxDepth: integer('max_depth').notNull(),

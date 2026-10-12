@@ -14,7 +14,7 @@ const { db, openDb } = await import('../db/client')
 const { crawls, links, pages, settings } = await import('../db/schema')
 const jobs = await import('./jobs')
 const { getRunnerSettings, saveRunnerSettings } = await import('./settings')
-const { DEFAULT_RUNNER_SETTINGS } = await import('#/lib/schemas')
+const { DEFAULT_RUNNER_SETTINGS, crawlNameSchema } = await import('#/lib/schemas')
 const { LEASE_MS, MAX_ATTEMPTS } = jobs
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
@@ -396,5 +396,27 @@ describe('runner settings', () => {
 
     configure({ fetchDelayMs: 2500, slotsPerRunner: 8 })
     expect(getRunnerSettings(db)).toMatchObject({ fetchDelayMs: 2500, slotsPerRunner: 8 })
+  })
+})
+
+describe('crawl names', () => {
+  it('stores a name when one is given', () => {
+    const named = jobs.createCrawl(db, {
+      name: 'Marketing site',
+      rootUrl: ROOT,
+      maxDepth: 0,
+      maxPages: 1,
+      viewports: ['desktop'],
+      respectRobots: false,
+    })
+    expect(crawlRow(named).name).toBe('Marketing site')
+    expect(crawlRow(newCrawl()).name).toBeNull()
+  })
+
+  it('trims names and treats a blank one as none', () => {
+    expect(crawlNameSchema.parse('  Raycast  ')).toBe('Raycast')
+    expect(crawlNameSchema.parse('   ')).toBeNull()
+    expect(crawlNameSchema.parse(null)).toBeNull()
+    expect(crawlNameSchema.safeParse('x'.repeat(121)).success).toBe(false)
   })
 })

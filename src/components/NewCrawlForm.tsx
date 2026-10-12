@@ -22,6 +22,7 @@ export function NewCrawlForm() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [url, setUrl] = useState('')
+  const [name, setName] = useState('')
   const [maxDepth, setMaxDepth] = useState('2')
   const [maxPages, setMaxPages] = useState('200')
   const [viewports, setViewports] = useState<ViewportId[]>([...VIEWPORT_IDS])
@@ -42,6 +43,7 @@ export function NewCrawlForm() {
     // Let people type "example.com" without the scheme.
     const withScheme = /^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`
     const parsed = crawlInputSchema.safeParse({
+      name,
       url: withScheme,
       maxDepth,
       maxPages,
@@ -73,17 +75,33 @@ export function NewCrawlForm() {
       </CardHeader>
       <CardContent>
         <form onSubmit={onSubmit} className="grid gap-5">
-          <div className="grid gap-2">
-            <Label htmlFor="url">Website URL</Label>
-            <Input
-              id="url"
-              placeholder="https://example.com"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              aria-invalid={!!errors.url}
-              autoFocus
-            />
-            {errors.url && <p className="text-destructive text-sm">{errors.url}</p>}
+          <div className="grid gap-5 sm:grid-cols-2">
+            <div className="grid content-start gap-2">
+              <Label htmlFor="url">Website URL</Label>
+              <Input
+                id="url"
+                placeholder="https://example.com"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                aria-invalid={!!errors.url}
+                autoFocus
+              />
+              {errors.url && <p className="text-destructive text-sm">{errors.url}</p>}
+            </div>
+            <div className="grid content-start gap-2">
+              <Label htmlFor="name">
+                Name <span className="text-muted-foreground font-normal">(optional)</span>
+              </Label>
+              <Input
+                id="name"
+                placeholder="Defaults to the URL"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                aria-invalid={!!errors.name}
+                maxLength={120}
+              />
+              {errors.name && <p className="text-destructive text-sm">{errors.name}</p>}
+            </div>
           </div>
 
           <div className="grid gap-5 sm:grid-cols-2">

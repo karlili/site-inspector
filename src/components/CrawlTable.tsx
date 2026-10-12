@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from '#/components/ui/table'
-import { crawlsQuery } from '#/lib/queries'
+import { crawlTitle, crawlsQuery } from '#/lib/queries'
 import { VIEWPORTS } from '#/lib/viewports'
 import { deleteCrawl } from '#/server/functions/crawls'
 
@@ -52,8 +52,13 @@ export function CrawlTable() {
                   params={{ crawlId: crawl.id }}
                   className="hover:underline"
                 >
-                  {crawl.rootUrl}
+                  {crawlTitle(crawl)}
                 </Link>
+                {crawl.name && (
+                  <div className="text-muted-foreground truncate text-xs font-normal">
+                    {crawl.rootUrl}
+                  </div>
+                )}
               </TableCell>
               <TableCell>
                 <StatusBadge status={crawl.status} />

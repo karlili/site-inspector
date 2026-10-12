@@ -4,6 +4,7 @@ import { Link, createFileRoute } from '@tanstack/react-router'
 import { ReactFlowProvider } from '@xyflow/react'
 import { ArrowLeft, LayoutGrid, Network, PanelLeft, Play, Square, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
+import { CrawlName } from '#/components/CrawlName'
 import { RunnerStatus } from '#/components/RunnerStatus'
 import { StatusBadge } from '#/components/StatusBadge'
 import { GoDeeper } from '#/components/sitemap/GoDeeper'
@@ -14,7 +15,7 @@ import { useBoard } from '#/components/sitemap/useBoard'
 import { Button } from '#/components/ui/button'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '#/components/ui/resizable'
 import { analyzeLinks } from '#/lib/linkHealth'
-import { crawlQuery, isActive } from '#/lib/queries'
+import { crawlQuery, crawlTitle, isActive } from '#/lib/queries'
 import { VIEWPORTS, VIEWPORT_IDS, type ViewportId } from '#/lib/viewports'
 import { cancelCrawl, resumeCrawl } from '#/server/functions/crawls'
 
@@ -22,7 +23,7 @@ export const Route = createFileRoute('/crawls/$crawlId')({
   loader: ({ context, params }) =>
     context.queryClient.ensureQueryData(crawlQuery(params.crawlId)),
   head: ({ loaderData }) => ({
-    meta: [{ title: loaderData ? `${loaderData.crawl.hostname} · Site Inspector` : 'Site Inspector' }],
+    meta: [{ title: loaderData ? `${crawlTitle(loaderData.crawl)} · Site Inspector` : 'Site Inspector' }],
   }),
   component: CrawlPage,
 })
@@ -153,10 +154,23 @@ function CrawlPage() {
         </Button>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h1 className="truncate font-semibold">{crawl.rootUrl}</h1>
+            <CrawlName crawl={crawl} />
             <StatusBadge status={crawl.status} />
           </div>
           <p className="text-muted-foreground text-xs">
+            {crawl.name && (
+              <>
+                <a
+                  href={crawl.rootUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="hover:text-foreground inline-block max-w-80 truncate align-bottom hover:underline"
+                >
+                  {crawl.rootUrl}
+                </a>
+                {' · '}
+              </>
+            )}
             {done}/{pages.length} pages captured
             {failed > 0 && ` · ${failed} failed`}
             {interrupted > 0 && ` · ${interrupted} not captured`}

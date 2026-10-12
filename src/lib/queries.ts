@@ -5,6 +5,10 @@ import type { CrawlStatus } from './schemas'
 
 export const isActive = (status: CrawlStatus) => status === 'queued' || status === 'running'
 
+/** What a crawl is called everywhere it's shown. */
+export const crawlTitle = (crawl: { name: string | null; rootUrl: string }) =>
+  crawl.name ?? crawl.rootUrl
+
 export const crawlsQuery = () =>
   queryOptions({
     queryKey: ['crawls'],

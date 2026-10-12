@@ -1,0 +1,1 @@
+ALTER TABLE `crawls` ADD `name` text;

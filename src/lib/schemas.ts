@@ -9,7 +9,16 @@ export type PageSource = (typeof pageSources)[number]
 
 export const viewportSchema = z.enum(VIEWPORT_IDS)
 
+/** A crawl's display name; blank means it goes by its start URL. */
+export const crawlNameSchema = z
+  .string()
+  .trim()
+  .max(120, 'Keep it under 120 characters')
+  .nullable()
+  .transform((name) => name || null)
+
 export const crawlInputSchema = z.object({
+  name: crawlNameSchema.optional(),
   url: z
     .url({ protocol: /^https?$/, message: 'Enter an http(s) URL' })
     .trim(),
@@ -21,6 +30,8 @@ export const crawlInputSchema = z.object({
 export type CrawlInput = z.infer<typeof crawlInputSchema>
 
 export const crawlIdSchema = z.object({ crawlId: z.string().min(1) })
+
+export const renameCrawlSchema = crawlIdSchema.extend({ name: crawlNameSchema })
 
 export const pageRefSchema = z.object({ crawlId: z.string().min(1), pageId: z.string().min(1) })
 

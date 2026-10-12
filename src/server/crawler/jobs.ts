@@ -74,6 +74,7 @@ export function createCrawl(
       tx.insert(crawls)
         .values({
           id,
+          name: input.name ?? null,
           rootUrl: input.rootUrl,
           hostname: new URL(input.rootUrl).hostname,
           maxDepth: input.maxDepth,
