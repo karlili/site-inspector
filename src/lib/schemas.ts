@@ -35,6 +35,12 @@ export const renameCrawlSchema = crawlIdSchema.extend({ name: crawlNameSchema })
 
 export const pageRefSchema = z.object({ crawlId: z.string().min(1), pageId: z.string().min(1) })
 
+/** Pages a branch starts from: a frame's page and the other URLs folded into it. */
+export const pageBranchSchema = z.object({
+  crawlId: z.string().min(1),
+  pageIds: z.array(z.string().min(1)).min(1).max(10),
+})
+
 export const expandPageSchema = pageRefSchema.extend({
   levels: z.int().min(1).max(MAX_DEPTH),
 })

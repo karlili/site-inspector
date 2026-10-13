@@ -4,7 +4,7 @@ import { isSameSite, looksLikeHtml, normalizeUrl } from './url'
 describe('normalizeUrl', () => {
   it('canonicalizes equivalent URLs to the same string', () => {
     const variants = [
-      'https://Example.com/about/',
+      'https://Example.com/about',
       'https://example.com:443/about',
       'https://example.com/about#team',
       'https://example.com/about?utm_source=x',
@@ -17,7 +17,12 @@ describe('normalizeUrl', () => {
 
   it('keeps the root slash and strips index files', () => {
     expect(normalizeUrl('https://example.com')).toBe('https://example.com/')
-    expect(normalizeUrl('https://example.com/docs/index.html')).toBe('https://example.com/docs')
+    expect(normalizeUrl('https://example.com/docs/index.html')).toBe('https://example.com/docs/')
+  })
+
+  it('keeps trailing slashes, which can name a different page', () => {
+    expect(normalizeUrl('https://example.com/site/atoz/')).toBe('https://example.com/site/atoz/')
+    expect(normalizeUrl('https://example.com/site/atoz')).toBe('https://example.com/site/atoz')
   })
 
   it('sorts query params', () => {

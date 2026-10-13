@@ -1,6 +1,6 @@
 import { Fragment, createContext, memo, useContext } from 'react'
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
-import { CirclePause, ImageOff, Link2Off, Loader2, Maximize2 } from 'lucide-react'
+import { CirclePause, ImageOff, Link2Off, Loader2, Maximize2, Split } from 'lucide-react'
 import { cn } from '#/lib/utils'
 import { isPageOpen, type PageStatus } from '#/lib/schemas'
 
@@ -17,6 +17,8 @@ export type PageNodeData = {
   orphan: boolean
   /** Links on this page to pages that are missing or wouldn't load. */
   brokenLinks: number
+  /** The path shows a different page with a trailing slash than without. */
+  slashConflict: boolean
 }
 
 export type PageNodeType = Node<PageNodeData, 'page'>
@@ -25,7 +27,9 @@ export type PageNodeType = Node<PageNodeData, 'page'>
 export const BoardActionsContext = createContext<{
   openPage: (pageId: string) => void
   focusSection: (sectionId: string) => void
-}>({ openPage: () => {}, focusSection: () => {} })
+  /** Capture a page and everything filed under it again. */
+  refetchFrom: (pageId: string) => void
+}>({ openPage: () => {}, focusSection: () => {}, refetchFrom: () => {} })
 
 /** Keeps the last path segment readable by shortening the folders before it first. */
 function FramePath({ path }: { path: string }) {
@@ -35,6 +39,24 @@ function FramePath({ path }: { path: string }) {
     <span className="flex min-w-0">
       <span className="min-w-0 truncate">{path.slice(0, cut + 1)}</span>
       <span className="max-w-full shrink-0 truncate">{path.slice(cut + 1)}</span>
+    </span>
+  )
+}
+
+/** This frame stands for two URLs, `/a` and `/a/`, that the site answers with different pages. */
+export function SlashConflictBadge({ path, className }: { path: string; className?: string }) {
+  const bare = path.replace(/\/$/, '')
+  return (
+    <span
+      className={cn(
+        'text-warning border-warning flex shrink-0 items-center gap-0.5 border px-1 text-[10px]',
+        className,
+      )}
+      title={`${bare} and ${bare}/ show different pages`}
+      aria-label={`${bare} and ${bare}/ show different pages`}
+    >
+      <Split className="size-2.5" />
+      2 pages
     </span>
   )
 }
@@ -70,6 +92,7 @@ export const PageNode = memo(function PageNode({ id, data, selected }: NodeProps
         )}
         {badStatus && <span className="bg-destructive shrink-0 px-1 text-[10px] text-white">{data.httpStatus}</span>}
         {data.orphan && <span className="bg-warning shrink-0 px-1 text-[10px] text-white">Orphan</span>}
+        {data.slashConflict && <SlashConflictBadge path={data.path} />}
         {data.brokenLinks > 0 && (
           <span
             className="text-destructive-foreground border-destructive-foreground flex shrink-0 items-center gap-0.5 border px-1 text-[10px] tabular-nums"

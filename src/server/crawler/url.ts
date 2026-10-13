@@ -37,11 +37,12 @@ export function normalizeUrl(raw: string, base?: string): string | null {
     .sort(([a], [b]) => a.localeCompare(b))
   url.search = new URLSearchParams(params).toString()
 
-  // Collapse duplicate slashes, strip trailing slash (except the root) and index files.
-  let pathname = url.pathname.replace(/\/{2,}/g, '/')
-  pathname = pathname.replace(/\/index\.(html?|php|aspx?)$/i, '/')
-  if (pathname.length > 1 && pathname.endsWith('/')) pathname = pathname.slice(0, -1)
-  url.pathname = pathname
+  // Collapse duplicate slashes and strip index files. A trailing slash is kept:
+  // servers may answer `/a` and `/a/` with different pages, and it changes how
+  // the page's relative links resolve.
+  url.pathname = url.pathname
+    .replace(/\/{2,}/g, '/')
+    .replace(/\/index\.(html?|php|aspx?)$/i, '/')
 
   return url.toString()
 }

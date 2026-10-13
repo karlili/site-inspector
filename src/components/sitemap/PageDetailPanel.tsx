@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ExternalLink, Link2Off, RotateCw, X } from 'lucide-react'
+import { ExternalLink, Link2Off, RotateCw, Split, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { StatusBadge } from '#/components/StatusBadge'
 import { GoDeeper } from '#/components/sitemap/GoDeeper'
@@ -9,13 +9,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import type { LinkHealth } from '#/lib/linkHealth'
 import { screenshotUrl, type CrawlDetail } from '#/lib/queries'
 import { isPageOpen } from '#/lib/schemas'
+import type { SlashGroups } from '#/lib/slashVariants'
 import { cn } from '#/lib/utils'
 import { VIEWPORTS, VIEWPORT_IDS, type ViewportId } from '#/lib/viewports'
 import { refetchPage } from '#/server/functions/crawls'
+import { pathOf } from './useBoard'
 
 interface Props {
   detail: CrawlDetail
   health: LinkHealth
+  groups: SlashGroups<CrawlDetail['pages'][number]>
+  /** The board frame shown; for `/a` and `/a/` the panel switches between them. */
   pageId: string
   /** The screen size the board is showing; its tab opens first. */
   viewport: ViewportId
@@ -24,7 +28,14 @@ interface Props {
 }
 
 /** Docked to the right of the board: one page's full-size screenshots and where it's linked from. */
-export function PageDetailPanel({ detail, health, pageId, viewport, onPick, onClose }: Props) {
+export function PageDetailPanel({ detail, health, groups, pageId: frameId, viewport, onPick, onClose }: Props) {
+  const variants = groups.variants.get(frameId)
+  const conflict = groups.conflicts.has(frameId)
+  const [variantId, setVariantId] = useState(frameId)
+  useEffect(() => setVariantId(frameId), [frameId])
+  // Everything below is about the URL picked; link health is the frame's.
+  const pageId = variants?.some((p) => p.id === variantId) ? variantId : frameId
+
   const page = detail.pages.find((p) => p.id === pageId)
   const shots = detail.screenshots
     .filter((s) => s.pageId === pageId)
@@ -33,7 +44,7 @@ export function PageDetailPanel({ detail, health, pageId, viewport, onPick, onCl
   const referrers = detail.links
     .filter((l) => l.toPageId === pageId && l.fromPageId !== pageId)
     .flatMap((l) => detail.pages.find((p) => p.id === l.fromPageId) ?? [])
-  const brokenLinks = (health.brokenOut.get(pageId) ?? []).flatMap((id) => detail.pages.find((p) => p.id === id) ?? [])
+  const brokenLinks = (health.brokenOut.get(frameId) ?? []).flatMap((id) => detail.pages.find((p) => p.id === id) ?? [])
 
   // Follow the board's screen size, but let the tabs switch on their own.
   const [tab, setTab] = useState<ViewportId>(viewport)
@@ -62,6 +73,43 @@ export function PageDetailPanel({ detail, health, pageId, viewport, onPick, onCl
             <X />
           </Button>
         </div>
+        {variants && (
+          <div className="flex w-fit max-w-full border" role="group" aria-label="URL">
+            {variants.map((v) => (
+              <Button
+                key={v.id}
+                variant={v.id === pageId ? 'secondary' : 'ghost'}
+                size="xs"
+                aria-pressed={v.id === pageId}
+                onClick={() => setVariantId(v.id)}
+                className="min-w-0 font-mono"
+                title={v.title ?? v.url}
+              >
+                <span className="truncate">{pathOf(v.url)}</span>
+              </Button>
+            ))}
+          </div>
+        )}
+        {variants && conflict && (
+          <div className="border-warning text-warning border-l-2 pl-2 text-xs">
+            <p className="flex items-center gap-1 font-medium">
+              <Split className="size-3.5" />
+              These URLs differ only by a trailing slash, but show different pages:
+            </p>
+            <ul className="mt-1">
+              {variants.map((v) => (
+                <li key={v.id} className="flex gap-2">
+                  <span className="shrink-0 font-mono text-[11px]">{pathOf(v.url)}</span>
+                  <span className="text-muted-foreground min-w-0 truncate">
+                    {v.title || 'Untitled page'}
+                    {v.httpStatus != null && ` · HTTP ${v.httpStatus}`}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-muted-foreground mt-1">Check which one each link on the site is meant to point to.</p>
+          </div>
+        )}
         <a
           href={page.url}
           target="_blank"
@@ -98,7 +146,7 @@ export function PageDetailPanel({ detail, health, pageId, viewport, onPick, onCl
             {page.error}
           </p>
         )}
-        {health.orphans.has(pageId) && (
+        {health.orphans.has(frameId) && (
           <p className="border-warning text-warning border-l-2 pl-2 text-xs">
             Orphan: {page.source === 'sitemap' ? 'listed in sitemap.xml, but no' : 'no'} chain of links leads here
             from the start page.

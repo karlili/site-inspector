@@ -6,6 +6,7 @@ import {
   crawlIdSchema,
   crawlInputSchema,
   expandPageSchema,
+  pageBranchSchema,
   pageRefSchema,
   renameCrawlSchema,
 } from '#/lib/schemas'
@@ -16,6 +17,8 @@ import {
   createCrawl,
   expandPage as expandPageJobs,
   listOnlineRunners,
+  refetchBranch as refetchBranchJobs,
+  refetchCrawl as refetchCrawlJobs,
   refetchPage as refetchPageJobs,
   resumeCrawl as resumeCrawlJobs,
 } from '../crawler/jobs'
@@ -90,10 +93,22 @@ export const resumeCrawl = createServerFn({ method: 'POST' })
     return { queued: resumeCrawlJobs(db, data.crawlId) }
   })
 
+export const refetchCrawl = createServerFn({ method: 'POST' })
+  .validator(crawlIdSchema)
+  .handler(async ({ data }) => {
+    return { queued: refetchCrawlJobs(db, data.crawlId) }
+  })
+
 export const refetchPage = createServerFn({ method: 'POST' })
   .validator(pageRefSchema)
   .handler(async ({ data }) => {
     return { queued: refetchPageJobs(db, data.crawlId, data.pageId) }
+  })
+
+export const refetchBranch = createServerFn({ method: 'POST' })
+  .validator(pageBranchSchema)
+  .handler(async ({ data }) => {
+    return { queued: refetchBranchJobs(db, data.crawlId, data.pageIds) }
   })
 
 export const expandPage = createServerFn({ method: 'POST' })

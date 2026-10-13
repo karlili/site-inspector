@@ -371,6 +371,45 @@ describe('refetch, go deeper and resume', () => {
     expect(crawlRow(crawlId).status).toBe('done')
   })
 
+  it('refetches a whole finished crawl level by level', () => {
+    const crawlId = newCrawl({ maxDepth: 2 })
+    finishRoot('r', [url('/a'), url('/b')])
+    drain({ '/a': ['/x'] })
+    db.update(pages).set({ status: 'failed', error: 'boom' }).where(eq(pages.id, pageAt(crawlId, '/x').id)).run()
+    expect(crawlRow(crawlId).status).toBe('done')
+
+    expect(jobs.refetchCrawl(db, crawlId)).toBe(4)
+    expect(crawlRow(crawlId)).toMatchObject({ status: 'queued', finishedAt: null })
+    expect(pageRows(crawlId).every((p) => p.status === 'pending' && p.attempts === 0 && !p.error)).toBe(true)
+    // Not again while it's running.
+    expect(jobs.refetchCrawl(db, crawlId)).toBe(0)
+
+    // The root goes first; the site's links are rediscovered as it's recaptured.
+    const captured = drain({ '/': ['/a', '/b', '/c'], '/a': ['/x'] })
+    expect(captured[0]).toBe('/')
+    expect(captured.sort()).toEqual(['/', '/a', '/b', '/c', '/x'])
+    expect(pageAt(crawlId, '/x').status).toBe('done')
+    expect(linkPairs(crawlId)).toEqual(['/>/a', '/>/b', '/>/c', '/a>/x'])
+    expect(crawlRow(crawlId).status).toBe('done')
+  })
+
+  it('refetches a page and everything filed under it', () => {
+    const crawlId = newCrawl({ maxDepth: 3 })
+    finishRoot('r', [url('/a'), url('/b')])
+    drain({ '/a': ['/a/1', '/b'], '/a/1': ['/a/1/x'], '/b': ['/b/1'] })
+    const a = pageAt(crawlId, '/a')
+
+    // /b is linked from /a but filed under the root, so it isn't part of /a's branch.
+    expect(jobs.refetchBranch(db, crawlId, [a.id])).toBe(3)
+    expect(crawlRow(crawlId).status).toBe('queued')
+    expect(jobs.refetchBranch(db, crawlId, [a.id])).toBe(0)
+
+    expect(drain({ '/a': ['/a/1', '/a/2'], '/a/1': ['/a/1/x'] })).toEqual(['/a', '/a/1', '/a/2', '/a/1/x'])
+    expect(pageAt(crawlId, '/a/2').parentPageId).toBe(a.id)
+    expect(linkPairs(crawlId)).not.toContain('/a>/b')
+    expect(crawlRow(crawlId).status).toBe('done')
+  })
+
   it('resumes a crawl whose start page failed by retrying it', () => {
     const crawlId = newCrawl()
     const root = jobs.claimNextPage(db, 'r')!

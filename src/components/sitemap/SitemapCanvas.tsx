@@ -15,6 +15,7 @@ import {
 } from '@xyflow/react'
 import type { LinkHealth } from '#/lib/linkHealth'
 import type { CrawlDetail } from '#/lib/queries'
+import { isPageOpen } from '#/lib/schemas'
 import { cn } from '#/lib/utils'
 import { sectionBounds } from './layout'
 import { BoardActionsContext, PageNode, type PageNodeType } from './PageNode'
@@ -39,6 +40,8 @@ interface Props {
   detail: CrawlDetail
   board: BoardModel
   health: LinkHealth
+  /** Frames whose URL shows a different page with a trailing slash than without. */
+  slashConflicts: Set<string>
   showLinks: boolean
   /** Bumped by the parent when it re-runs the auto layout. */
   layoutVersion: number
@@ -51,12 +54,14 @@ interface Props {
   focusRequest: FocusRequest | null
   onSelectPage: (pageId: string | null) => void
   onOpenPage: (pageId: string) => void
+  onRefetchFrom: (pageId: string) => void
 }
 
 export function SitemapCanvas({
   detail,
   board,
   health,
+  slashConflicts,
   showLinks,
   layoutVersion,
   selectedPageId,
@@ -65,6 +70,7 @@ export function SitemapCanvas({
   focusRequest,
   onSelectPage,
   onOpenPage,
+  onRefetchFrom,
 }: Props) {
   const { links } = detail
   const [frames, setFrames, onFramesChange] = useNodesState<PageNodeType>([])
@@ -111,11 +117,12 @@ export function SitemapCanvas({
             cropped: frame.cropped,
             orphan: health.orphans.has(id),
             brokenLinks: health.brokenOut.get(id)?.length ?? 0,
+            slashConflict: slashConflicts.has(id),
           },
         }
       }),
     )
-  }, [board, health, setFrames, layoutVersion])
+  }, [board, health, slashConflicts, setFrames, layoutVersion])
 
   // Selection, preview and search dimming only touch the frames whose state changed.
   useEffect(() => {
@@ -166,6 +173,8 @@ export function SitemapCanvas({
         title: section.title,
         count: section.pageIds.length,
         titleRoom: titleRoom(box),
+        parentPageId: section.parent?.page.id ?? null,
+        parentOpen: !!section.parent && isPageOpen(section.parent.page.status),
       },
     }))
   }, [board, frames])
@@ -272,8 +281,12 @@ export function SitemapCanvas({
   }, [frames, links, health, showLinks, selectedPageId])
 
   const actions = useMemo(
-    () => ({ openPage: onOpenPage, focusSection: (sectionId: string) => focus({ sectionId }) }),
-    [onOpenPage, focus],
+    () => ({
+      openPage: onOpenPage,
+      focusSection: (sectionId: string) => focus({ sectionId }),
+      refetchFrom: onRefetchFrom,
+    }),
+    [onOpenPage, focus, onRefetchFrom],
   )
 
   return (

@@ -16,6 +16,7 @@ import type { LinkHealth } from '#/lib/linkHealth'
 import type { CrawlDetail } from '#/lib/queries'
 import { isPageOpen } from '#/lib/schemas'
 import { cn } from '#/lib/utils'
+import { SlashConflictBadge } from './PageNode'
 import type { BoardModel } from './useBoard'
 
 /** How long the pointer rests on a row before the board zooms to it. */
@@ -26,6 +27,8 @@ interface Props {
   board: BoardModel
   links: CrawlDetail['links']
   health: LinkHealth
+  /** Pages whose URL shows a different page with a trailing slash than without. */
+  slashConflicts: Set<string>
   query: string
   onQueryChange: (query: string) => void
   /** Ids matching `query` and the issues filter, or null when neither is on. */
@@ -51,6 +54,7 @@ export function LayersPanel({
   board,
   links,
   health,
+  slashConflicts,
   query,
   onQueryChange,
   matches,
@@ -318,6 +322,7 @@ export function LayersPanel({
                 {health.orphans.has(id) && (
                   <span className="bg-warning mt-0.5 shrink-0 px-1 text-[10px] text-white">Orphan</span>
                 )}
+                {slashConflicts.has(id) && <SlashConflictBadge path={frame.path} className="mt-0.5" />}
                 {brokenLinks > 0 && (
                   <span
                     className="text-destructive-foreground border-destructive-foreground mt-0.5 flex shrink-0 items-center gap-0.5 border px-1 text-[10px] tabular-nums"

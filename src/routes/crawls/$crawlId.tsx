@@ -2,7 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { ReactFlowProvider } from '@xyflow/react'
-import { ArrowLeft, LayoutGrid, Network, PanelLeft, Play, Square, TriangleAlert } from 'lucide-react'
+import { ArrowLeft, LayoutGrid, Network, PanelLeft, Play, RotateCw, Square, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 import { CrawlName } from '#/components/CrawlName'
 import { RunnerStatus } from '#/components/RunnerStatus'
@@ -16,8 +16,9 @@ import { Button } from '#/components/ui/button'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '#/components/ui/resizable'
 import { analyzeLinks } from '#/lib/linkHealth'
 import { crawlQuery, crawlTitle, isActive } from '#/lib/queries'
+import { foldSlashVariants, groupSlashVariants, healthPages } from '#/lib/slashVariants'
 import { VIEWPORTS, VIEWPORT_IDS, type ViewportId } from '#/lib/viewports'
-import { cancelCrawl, resumeCrawl } from '#/server/functions/crawls'
+import { cancelCrawl, refetchBranch, refetchCrawl, resumeCrawl } from '#/server/functions/crawls'
 
 export const Route = createFileRoute('/crawls/$crawlId')({
   loader: ({ context, params }) =>
@@ -67,9 +68,17 @@ function CrawlPage() {
     [measureCanvas],
   )
 
-  const board = useBoard(detail, viewport, boardAspect)
+  // `/a` and `/a/` are crawled separately but share a frame on the board.
+  const groups = useMemo(() => groupSlashVariants(pages), [pages])
+  const view = useMemo(() => ({ ...detail, ...foldSlashVariants(pages, detail.links, groups) }), [detail, pages, groups])
+  const groupOf = useCallback((pageId: string) => groups.groupOf.get(pageId) ?? pageId, [groups])
 
-  const health = useMemo(() => analyzeLinks(pages, detail.links), [pages, detail.links])
+  const board = useBoard(view, viewport, boardAspect)
+
+  const health = useMemo(() => {
+    const linkHealth = analyzeLinks(healthPages(view.pages, groups), view.links)
+    return { ...linkHealth, issueIds: new Set([...linkHealth.issueIds, ...groups.conflicts]) }
+  }, [view, groups])
   const brokenLinkCount = [...health.brokenOut.values()].reduce((n, targets) => n + targets.length, 0)
 
   // Pages the search and the issues filter leave in view; null when neither is on.
@@ -81,10 +90,11 @@ function CrawlPage() {
         if (showIssues && !health.issueIds.has(id)) return false
         if (!q) return true
         const frame = board.frames.get(id)!
-        return [frame.number, frame.path, frame.page.title ?? ''].some((s) => s.toLowerCase().includes(q))
+        const titles = (groups.variants.get(id) ?? [frame.page]).map((p) => p.title ?? '')
+        return [frame.number, frame.path, ...titles].some((s) => s.toLowerCase().includes(q))
       }),
     )
-  }, [board, deferredQuery, showIssues, health])
+  }, [board, groups, deferredQuery, showIssues, health])
 
   const toggleIssues = () => {
     if (!showIssues) setFocusRequest({ pageIds: [...health.issueIds] })
@@ -113,15 +123,50 @@ function CrawlPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['crawls'] }),
     onError: (err) => toast.error(err.message),
   })
+  const refetchAll = useMutation({
+    mutationFn: refetchCrawl,
+    onSuccess: ({ queued }) => {
+      if (queued > 0) toast.success(`Refetching ${queued} ${queued === 1 ? 'page' : 'pages'}`)
+      return queryClient.invalidateQueries({ queryKey: ['crawls'] })
+    },
+    onError: (err) => toast.error(err.message),
+  })
+  const confirmRefetchAll = () => {
+    const n = pages.length
+    if (!window.confirm(`Capture all ${n} ${n === 1 ? 'page' : 'pages'} again? Current screenshots stay until new ones replace them.`)) return
+    refetchAll.mutate({ data: { crawlId } })
+  }
+  const refetchFrom = useMutation({
+    mutationFn: refetchBranch,
+    onSuccess: ({ queued }) => {
+      if (queued === 0) toast.message('These pages are already being captured.')
+      else toast.success(`Refetching ${queued} ${queued === 1 ? 'page' : 'pages'}`)
+      return queryClient.invalidateQueries({ queryKey: ['crawls'] })
+    },
+    onError: (err) => toast.error(err.message),
+  })
+  // A frame may stand for both `/a` and `/a/`; the branch starts from each of them.
+  const refetchFromPage = useCallback(
+    (frameId: string) => {
+      const pageIds = (groups.variants.get(frameId) ?? [{ id: frameId }]).map((p) => p.id)
+      refetchFrom.mutate({ data: { crawlId, pageIds } })
+    },
+    [groups, crawlId, refetchFrom.mutate],
+  )
   const relayout = () => {
     measureCanvas()
     setLayoutVersion((v) => v + 1)
   }
 
-  const pickPage = useCallback((pageId: string) => {
-    setSelectedPageId(pageId)
-    setFocusRequest({ pageId })
-  }, [])
+  // Pages are picked by their own id (the preview lists links to either URL); the board knows their group.
+  const pickPage = useCallback(
+    (id: string) => {
+      const pageId = groupOf(id)
+      setSelectedPageId(pageId)
+      setFocusRequest({ pageId })
+    },
+    [groupOf],
+  )
 
   // Pointing at a page in the list zooms the board to it and shows it in the preview panel.
   const previewPage = useCallback((pageId: string) => {
@@ -135,7 +180,7 @@ function CrawlPage() {
     if (pageId) setPreviewPageId((open) => open && pageId)
   }, [])
 
-  const previewOpen = !!previewPageId && pages.some((p) => p.id === previewPageId)
+  const previewOpen = !!previewPageId && board.frames.has(previewPageId)
 
   const done = pages.filter((p) => p.status === 'done' || p.status === 'failed').length
   const failed = pages.filter((p) => p.status === 'failed').length
@@ -176,6 +221,8 @@ function CrawlPage() {
             {interrupted > 0 && ` · ${interrupted} not captured`}
             {brokenLinkCount > 0 && ` · ${brokenLinkCount} broken ${brokenLinkCount === 1 ? 'link' : 'links'}`}
             {health.orphans.size > 0 && ` · ${health.orphans.size} orphan ${health.orphans.size === 1 ? 'page' : 'pages'}`}
+            {groups.conflicts.size > 0 &&
+              ` · ${groups.conflicts.size} trailing-slash ${groups.conflicts.size === 1 ? 'mismatch' : 'mismatches'}`}
             {' '}· depth {crawl.maxDepth} ·{' '}
             {crawl.viewports.map((v) => VIEWPORTS[v].label).join(', ')}
             {crawl.error && <span className="text-destructive"> · {crawl.error}</span>}
@@ -222,7 +269,7 @@ function CrawlPage() {
             size="sm"
             aria-pressed={showIssues}
             disabled={health.issueIds.size === 0 && !showIssues}
-            title="Only pages with broken links, pages they point to, and orphan pages"
+            title="Only pages with broken links, pages they point to, orphan pages, and URLs that show a different page with a trailing slash"
             onClick={toggleIssues}
           >
             <TriangleAlert />
@@ -237,6 +284,18 @@ function CrawlPage() {
             <LayoutGrid />
             Re-layout
           </Button>
+          {!active && pages.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={refetchAll.isPending}
+              onClick={confirmRefetchAll}
+              title="Capture every page again and rediscover the site's links"
+            >
+              <RotateCw />
+              Refetch all
+            </Button>
+          )}
           {/* Resume comes first: going deeper skips the pages Stop interrupted. */}
           {!active && !canResume && root?.status === 'done' && <GoDeeper crawlId={crawlId} pageId={root.id} />}
           {canResume && (
@@ -285,8 +344,9 @@ function CrawlPage() {
                   >
                     <LayersPanel
                       board={board}
-                      links={detail.links}
+                      links={view.links}
                       health={health}
+                      slashConflicts={groups.conflicts}
                       query={query}
                       onQueryChange={setQuery}
                       matches={matches}
@@ -302,9 +362,10 @@ function CrawlPage() {
               <ResizablePanel id="canvas" minSize={320}>
                 <div ref={canvasMounted} className="relative h-full">
                   <SitemapCanvas
-                    detail={detail}
+                    detail={view}
                     board={board}
                     health={health}
+                    slashConflicts={groups.conflicts}
                     showLinks={showLinks}
                     layoutVersion={layoutVersion}
                     selectedPageId={selectedPageId}
@@ -313,6 +374,7 @@ function CrawlPage() {
                     focusRequest={focusRequest}
                     onSelectPage={selectOnBoard}
                     onOpenPage={setPreviewPageId}
+                    onRefetchFrom={refetchFromPage}
                   />
                 </div>
               </ResizablePanel>
@@ -331,6 +393,7 @@ function CrawlPage() {
                     <PageDetailPanel
                       detail={detail}
                       health={health}
+                      groups={groups}
                       pageId={previewPageId}
                       viewport={viewport}
                       onPick={pickPage}

@@ -327,6 +327,42 @@ export function refetchPage(db: Db, crawlId: string, pageId: string): boolean {
 }
 
 /**
+ * Capture a page again together with everything filed under it (its branch of
+ * the parent tree), rediscovering their links. `pageIds` are the pages the
+ * branch starts from. Pages already waiting or being captured are left as they
+ * are. Returns how many pages were queued.
+ */
+export function refetchBranch(db: Db, crawlId: string, pageIds: string[]): number {
+  return db.transaction(
+    (tx) => {
+      const branch = tx
+        .all<{ id: string }>(sql`
+          with recursive branch(id) as (
+            select id from ${pages}
+            where crawl_id = ${crawlId} and id in (${sql.join(pageIds.map((id) => sql`${id}`), sql`, `)})
+            union
+            select p.id from ${pages} p join branch b on p.parent_page_id = b.id
+            where p.crawl_id = ${crawlId}
+          )
+          select id from branch`)
+        .map((r) => r.id)
+      let queued = 0
+      for (let i = 0; i < branch.length; i += 500) {
+        queued += tx
+          .update(pages)
+          .set(REQUEUED)
+          .where(and(inArray(pages.id, branch.slice(i, i + 500)), notInArray(pages.status, [...OPEN_PAGE])))
+          .returning({ id: pages.id })
+          .all().length
+      }
+      if (queued > 0) reopenCrawl(tx, crawlId)
+      return queued
+    },
+    { behavior: 'immediate' },
+  )
+}
+
+/**
  * Crawl `levels` more levels below a page: everything filed under it (its
  * branch of the parent tree) may now go that much deeper than it could before.
  * Expanding the root page extends the whole crawl. Captured pages enqueue the
@@ -429,6 +465,30 @@ export function resumeCrawl(db: Db, crawlId: string): number {
         .all()
       if (resumed.length > 0) reopenCrawl(tx, crawlId)
       return resumed.length
+    },
+    { behavior: 'immediate' },
+  )
+}
+
+/**
+ * Capture every page of a stopped or finished crawl again, level by level, and
+ * rediscover the site's links. Pages keep their screenshots until new ones
+ * replace them; pages nothing links to anymore stay on the board. Returns how
+ * many pages were queued (0 while the crawl is still running).
+ */
+export function refetchCrawl(db: Db, crawlId: string): number {
+  return db.transaction(
+    (tx) => {
+      const crawl = tx.select().from(crawls).where(eq(crawls.id, crawlId)).get()
+      if (!crawl || (ACTIVE_CRAWL as readonly string[]).includes(crawl.status)) return 0
+      const requeued = tx
+        .update(pages)
+        .set(REQUEUED)
+        .where(eq(pages.crawlId, crawlId))
+        .returning({ id: pages.id })
+        .all()
+      if (requeued.length > 0) reopenCrawl(tx, crawlId)
+      return requeued.length
     },
     { behavior: 'immediate' },
   )
