@@ -2,7 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { ReactFlowProvider } from '@xyflow/react'
-import { ArrowLeft, LayoutGrid, Network, PanelLeft, Play, RotateCw, Square, TriangleAlert } from 'lucide-react'
+import { ArrowLeft, LayoutGrid, Network, PanelLeft, Play, RotateCw, Square } from 'lucide-react'
 import { toast } from 'sonner'
 import { CrawlName } from '#/components/CrawlName'
 import { RunnerStatus } from '#/components/RunnerStatus'
@@ -231,74 +231,6 @@ function CrawlPage() {
           {active && <RunnerStatus onlyWhenMissing />}
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {viewports.length > 1 && (
-            <div className="flex border" role="group" aria-label="Screen size">
-              {viewports.map((v) => (
-                <Button
-                  key={v}
-                  variant={v === viewport ? 'secondary' : 'ghost'}
-                  size="sm"
-                  aria-pressed={v === viewport}
-                  onClick={() => setViewport(v)}
-                >
-                  {VIEWPORTS[v].label}
-                </Button>
-              ))}
-            </div>
-          )}
-          <Button
-            variant={showLayers ? 'secondary' : 'outline'}
-            size="sm"
-            aria-pressed={showLayers}
-            onClick={() => setShowLayers((v) => !v)}
-          >
-            <PanelLeft />
-            Pages
-          </Button>
-          <Button
-            variant={showLinks ? 'secondary' : 'outline'}
-            size="sm"
-            aria-pressed={showLinks}
-            title="Links of the selected page, or every link when nothing is selected"
-            onClick={() => setShowLinks((v) => !v)}
-          >
-            <Network />
-            {showLinks ? 'Hide' : 'Show'} links
-          </Button>
-          <Button
-            variant={showIssues ? 'secondary' : 'outline'}
-            size="sm"
-            aria-pressed={showIssues}
-            disabled={health.issueIds.size === 0 && !showIssues}
-            title="Only pages with broken links, pages they point to, orphan pages, and URLs that show a different page with a trailing slash"
-            onClick={toggleIssues}
-          >
-            <TriangleAlert />
-            Issues
-            {health.issueIds.size > 0 && <span className="tabular-nums">{health.issueIds.size}</span>}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={relayout}
-          >
-            <LayoutGrid />
-            Re-layout
-          </Button>
-          {!active && pages.length > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={refetchAll.isPending}
-              onClick={confirmRefetchAll}
-              title="Capture every page again and rediscover the site's links"
-            >
-              <RotateCw />
-              Refetch all
-            </Button>
-          )}
-          {/* Resume comes first: going deeper skips the pages Stop interrupted. */}
-          {!active && !canResume && root?.status === 'done' && <GoDeeper crawlId={crawlId} pageId={root.id} />}
           {canResume && (
             <Button
               size="sm"
@@ -352,6 +284,8 @@ function CrawlPage() {
                       query={query}
                       onQueryChange={setQuery}
                       matches={matches}
+                      showIssues={showIssues}
+                      onToggleIssues={toggleIssues}
                       selectedPageId={selectedPageId}
                       onPick={pickPage}
                       onHover={previewPage}
@@ -361,8 +295,75 @@ function CrawlPage() {
                   <ResizableHandle withHandle />
                 </>
               )}
-              <ResizablePanel id="canvas" minSize={320}>
-                <div ref={canvasMounted} className="relative h-full">
+              <ResizablePanel id="canvas" className="flex flex-col" minSize={320}>
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-card px-3 py-2">
+                  {/* Equal-width sides keep the middle group centred when a side is empty. */}
+                  <div className="flex flex-1 justify-start">
+                    {viewports.length > 1 && (
+                      <div className="flex border" role="group" aria-label="Screen size">
+                        {viewports.map((v) => (
+                          <Button
+                            key={v}
+                            variant={v === viewport ? 'secondary' : 'ghost'}
+                            size="sm"
+                            aria-pressed={v === viewport}
+                            onClick={() => setViewport(v)}
+                          >
+                            {VIEWPORTS[v].label}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex border" role="group" aria-label="Canvas">
+                    <Button
+                      variant={showLayers ? 'secondary' : 'ghost'}
+                      size="icon-sm"
+                      aria-pressed={showLayers}
+                      aria-label="Pages"
+                      title="Pages"
+                      onClick={() => setShowLayers((v) => !v)}
+                    >
+                      <PanelLeft />
+                    </Button>
+                    <Button
+                      variant={showLinks ? 'secondary' : 'ghost'}
+                      size="icon-sm"
+                      aria-pressed={showLinks}
+                      aria-label="Links"
+                      title="Show links of the selected page, or every link when nothing is selected"
+                      onClick={() => setShowLinks((v) => !v)}
+                    >
+                      <Network />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="Re-layout"
+                      title="Re-layout"
+                      onClick={relayout}
+                    >
+                      <LayoutGrid />
+                    </Button>
+                    {!active && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        disabled={refetchAll.isPending}
+                        onClick={confirmRefetchAll}
+                        aria-label="Refetch all"
+                        title="Refetch all: capture every page again and rediscover the site's links"
+                      >
+                        <RotateCw />
+                      </Button>
+                    )}
+                  </div>
+                  <div className="flex flex-1 justify-end">
+                    {/* Resume (in the header) comes first: going deeper skips the pages Stop interrupted. */}
+                    {!active && !canResume && root?.status === 'done' && <GoDeeper crawlId={crawlId} pageId={root.id} />}
+                  </div>
+                </div>
+                <div ref={canvasMounted} className="relative min-h-0 flex-1">
                   <SitemapCanvas
                     detail={view}
                     board={board}

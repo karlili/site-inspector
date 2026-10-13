@@ -9,6 +9,7 @@ import {
   Link2Off,
   Loader2,
   Search,
+  TriangleAlert,
 } from 'lucide-react'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
@@ -33,6 +34,8 @@ interface Props {
   onQueryChange: (query: string) => void
   /** Ids matching `query` and the issues filter, or null when neither is on. */
   matches: Set<string> | null
+  showIssues: boolean
+  onToggleIssues: () => void
   selectedPageId: string | null
   onPick: (pageId: string) => void
   /** The pointer settled on a page's row (or one of its references). */
@@ -58,6 +61,8 @@ export function LayersPanel({
   query,
   onQueryChange,
   matches,
+  showIssues,
+  onToggleIssues,
   selectedPageId,
   onPick,
   onHover,
@@ -205,6 +210,18 @@ export function LayersPanel({
             aria-label="Search pages"
           />
         </div>
+        <Button
+          variant={showIssues ? 'secondary' : 'outline'}
+          size={health.issueIds.size > 0 ? 'sm' : 'icon-sm'}
+          aria-pressed={showIssues}
+          aria-label="Issues"
+          disabled={health.issueIds.size === 0 && !showIssues}
+          title="Issues: only pages with broken links, pages they point to, orphan pages, and URLs that show a different page with a trailing slash"
+          onClick={onToggleIssues}
+        >
+          <TriangleAlert />
+          {health.issueIds.size > 0 && <span className="tabular-nums">{health.issueIds.size}</span>}
+        </Button>
         <Button
           variant="outline"
           size="icon-sm"
