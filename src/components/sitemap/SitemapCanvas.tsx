@@ -16,6 +16,7 @@ import {
 import type { LinkHealth } from '#/lib/linkHealth'
 import type { CrawlDetail } from '#/lib/queries'
 import { isPageOpen } from '#/lib/schemas'
+import { useTheme } from '#/lib/theme'
 import { cn } from '#/lib/utils'
 import { sectionBounds } from './layout'
 import { BoardActionsContext, PageNode, type PageNodeType } from './PageNode'
@@ -79,6 +80,7 @@ export function SitemapCanvas({
   // What the board last zoomed to, kept centred while the side panels resize it.
   const lastFocus = useRef<FocusRequest | null>(null)
   const { fitView } = useReactFlow()
+  const { resolvedTheme } = useTheme()
 
   useEffect(() => {
     userMovedViewport.current = false
@@ -293,6 +295,7 @@ export function SitemapCanvas({
     <BoardActionsContext.Provider value={actions}>
       <ReactFlow
         className="sitemap-board"
+        colorMode={resolvedTheme}
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}

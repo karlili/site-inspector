@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { CrawlName } from '#/components/CrawlName'
 import { RunnerStatus } from '#/components/RunnerStatus'
 import { StatusBadge } from '#/components/StatusBadge'
+import { ThemeToggle } from '#/components/ThemeToggle'
 import { GoDeeper } from '#/components/sitemap/GoDeeper'
 import { LayersPanel } from '#/components/sitemap/LayersPanel'
 import { PageDetailPanel } from '#/components/sitemap/PageDetailPanel'
@@ -320,6 +321,7 @@ function CrawlPage() {
               Stop
             </Button>
           )}
+          <ThemeToggle />
         </div>
       </header>
 

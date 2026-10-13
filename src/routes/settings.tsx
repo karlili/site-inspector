@@ -2,6 +2,7 @@ import { Link, createFileRoute } from '@tanstack/react-router'
 import { ArrowLeft } from 'lucide-react'
 import { RunnerSettingsForm } from '#/components/RunnerSettingsForm'
 import { RunnerStatus } from '#/components/RunnerStatus'
+import { ThemeToggle } from '#/components/ThemeToggle'
 import { Button } from '#/components/ui/button'
 import { runnerSettingsQuery } from '#/lib/queries'
 
@@ -22,6 +23,7 @@ function SettingsPage() {
         </Button>
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <RunnerStatus className="ml-auto" />
+        <ThemeToggle />
       </header>
       <RunnerSettingsForm />
     </main>

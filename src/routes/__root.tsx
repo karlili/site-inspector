@@ -1,6 +1,7 @@
-import { HeadContent, Scripts, createRootRouteWithContext } from '@tanstack/react-router'
+import { HeadContent, ScriptOnce, Scripts, createRootRouteWithContext } from '@tanstack/react-router'
 import type { QueryClient } from '@tanstack/react-query'
 import { Toaster } from '#/components/ui/sonner'
+import { themeInitScript } from '#/lib/theme'
 import appCss from '../styles.css?url'
 
 interface RouterContext {
@@ -21,8 +22,10 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    // themeInitScript sets the theme class and color-scheme before React hydrates.
+    <html lang="en" suppressHydrationWarning>
       <head>
+        <ScriptOnce children={themeInitScript} />
         <HeadContent />
       </head>
       <body>
