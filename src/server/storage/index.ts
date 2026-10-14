@@ -23,15 +23,15 @@ export type StorageDriver = 'local' | 's3'
 
 /**
  * The store picked by the environment: local disk under SCREENSHOT_DIR unless
- * SCREENSHOT_STORAGE=s3, which stores them in an S3-compatible bucket (AWS S3,
+ * STORAGE_DRIVER=s3, which stores them in an S3-compatible bucket (AWS S3,
  * Cloudflare R2, Google Cloud Storage's XML API, MinIO, …). See the README.
  */
 export function storeFromEnv(env: NodeJS.ProcessEnv = process.env): ScreenshotStore {
-  const driver = (env.SCREENSHOT_STORAGE || 'local').toLowerCase()
+  const driver = (env.STORAGE_DRIVER || 'local').toLowerCase()
   if (driver === 'local') return new LocalStore(SCREENSHOT_DIR)
   if (driver === 's3') {
     const bucket = env.S3_BUCKET
-    if (!bucket) throw new Error('SCREENSHOT_STORAGE=s3 needs S3_BUCKET')
+    if (!bucket) throw new Error('STORAGE_DRIVER=s3 needs S3_BUCKET')
     return new S3Store({
       bucket,
       prefix: env.S3_PREFIX,
@@ -45,7 +45,7 @@ export function storeFromEnv(env: NodeJS.ProcessEnv = process.env): ScreenshotSt
           : undefined,
     })
   }
-  throw new Error(`Unknown SCREENSHOT_STORAGE "${driver}" (expected "local" or "s3")`)
+  throw new Error(`Unknown STORAGE_DRIVER "${driver}" (expected "local" or "s3")`)
 }
 
 const globalForStore = globalThis as unknown as { __screenshotStore?: ScreenshotStore }

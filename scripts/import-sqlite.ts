@@ -4,7 +4,7 @@
  * Crawls already in Postgres are skipped, so it's safe to run again.
  *
  * Screenshots stay where they are when they're stored on local disk. With
- * SCREENSHOT_STORAGE=s3, the files under the local screenshot directory
+ * STORAGE_DRIVER=s3, the files under the local screenshot directory
  * (`--screenshots <dir>`, default `data/screenshots`) are uploaded to the
  * bucket as well.
  */

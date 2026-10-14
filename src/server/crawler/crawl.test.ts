@@ -12,7 +12,7 @@ import { LocalStore } from '../storage/local'
 // Isolate the database and screenshots from the dev data directory.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'site-inspector-test-'))
 process.env.DATA_DIR = tmp
-process.env.SCREENSHOT_STORAGE = 'local'
+process.env.STORAGE_DRIVER = 'local'
 delete process.env.SCREENSHOT_DIR
 const dropDatabase = await createTestDatabase()
 const { db, openDb, closeDb } = await import('../db/client')

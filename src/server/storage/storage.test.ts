@@ -108,12 +108,12 @@ describe('local screenshot store', () => {
 describe('storeFromEnv', () => {
   it('stores screenshots on local disk unless told otherwise', () => {
     expect(storeFromEnv({})).toBeInstanceOf(LocalStore)
-    expect(storeFromEnv({ SCREENSHOT_STORAGE: 'local' })).toBeInstanceOf(LocalStore)
+    expect(storeFromEnv({ STORAGE_DRIVER: 'local' })).toBeInstanceOf(LocalStore)
   })
 
   it('configures an S3-compatible bucket', () => {
     const store = storeFromEnv({
-      SCREENSHOT_STORAGE: 's3',
+      STORAGE_DRIVER: 's3',
       S3_BUCKET: 'shots',
       S3_PREFIX: '/site-inspector',
       S3_ENDPOINT: 'https://example.r2.cloudflarestorage.com',
@@ -124,7 +124,7 @@ describe('storeFromEnv', () => {
   })
 
   it('rejects incomplete or unknown settings', () => {
-    expect(() => storeFromEnv({ SCREENSHOT_STORAGE: 's3' })).toThrow(/S3_BUCKET/)
-    expect(() => storeFromEnv({ SCREENSHOT_STORAGE: 'ftp' })).toThrow(/Unknown SCREENSHOT_STORAGE/)
+    expect(() => storeFromEnv({ STORAGE_DRIVER: 's3' })).toThrow(/S3_BUCKET/)
+    expect(() => storeFromEnv({ STORAGE_DRIVER: 'ftp' })).toThrow(/Unknown STORAGE_DRIVER/)
   })
 })

@@ -28,7 +28,7 @@ Set these in the environment of the admin server **and** every runner, or copy `
 | --- | --- | --- |
 | `DATABASE_URL` | `postgres://postgres:postgres@localhost:5432/site_inspector` | Postgres connection string. Add `?sslmode=require` for hosted databases |
 | `DATABASE_POOL_SIZE` | `10` | Connections each process may open |
-| `SCREENSHOT_STORAGE` | `local` | `local` (files on disk) or `s3` (an S3-compatible bucket) |
+| `STORAGE_DRIVER` | `local` | `local` (files on disk) or `s3` (an S3-compatible bucket) |
 | `DATA_DIR` | `data` | Base directory for local files |
 | `SCREENSHOT_DIR` | `$DATA_DIR/screenshots` | Where `local` storage writes screenshots |
 | `S3_BUCKET` | | Bucket for `s3` storage (required) |
@@ -49,7 +49,7 @@ pnpm db:import-sqlite                        # reads data/site-inspector.db
 pnpm db:import-sqlite path/to/other.db       # or another file
 ```
 
-It copies crawls, pages, links, screenshots and settings, skipping crawls already in Postgres, so it can be run again. Local screenshots stay where they are; with `SCREENSHOT_STORAGE=s3` it also uploads `data/screenshots/` (or `--screenshots <dir>`) to the bucket. It uses Node's built-in `node:sqlite`, so it needs Node 22.13 or later.
+It copies crawls, pages, links, screenshots and settings, skipping crawls already in Postgres, so it can be run again. Local screenshots stay where they are; with `STORAGE_DRIVER=s3` it also uploads `data/screenshots/` (or `--screenshots <dir>`) to the bucket. It uses Node's built-in `node:sqlite`, so it needs Node 22.13 or later.
 
 ## Scripts
 

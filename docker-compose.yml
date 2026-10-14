@@ -15,7 +15,7 @@ services:
       interval: 2s
       retries: 15
 
-  # Optional: an S3-compatible bucket for SCREENSHOT_STORAGE=s3 (console on http://localhost:9001).
+  # Optional: an S3-compatible bucket for STORAGE_DRIVER=s3 (console on http://localhost:9001).
   minio:
     image: minio/minio:latest
     command: server /data --console-address :9001
