@@ -1,9 +1,8 @@
-import { randomUUID } from 'node:crypto'
-import fs from 'node:fs/promises'
 import path from 'node:path'
 import sharp from 'sharp'
 import type { Page } from 'playwright'
 import { MAX_FRAME_HEIGHT, VIEWPORTS, previewPath, type ViewportId } from '#/lib/viewports'
+import type { ScreenshotStore } from '../storage'
 
 /** Chromium can't render captures much taller than this. */
 const MAX_CAPTURE_HEIGHT = 16_000
@@ -30,13 +29,13 @@ export interface CapturedScreenshot {
 }
 
 /**
- * Full-page capture of an already-loaded page. Paths are returned relative to
- * `rootDir` so they can be served without exposing the filesystem layout.
+ * Full-page capture of an already-loaded page, saved to `store` under `relDir`.
+ * The paths returned are the capture's and thumbnail's storage keys.
  */
 export async function captureScreenshot(
   page: Page,
   viewport: ViewportId,
-  rootDir: string,
+  store: ScreenshotStore,
   relDir: string,
   baseName: string,
 ): Promise<CapturedScreenshot> {
@@ -58,7 +57,6 @@ export async function captureScreenshot(
   )
   const height = Math.round(captureHeight * zoom)
 
-  await fs.mkdir(path.join(rootDir, relDir), { recursive: true })
   const filePath = path.posix.join(relDir, `${baseName}-${viewport}.jpg`)
   const thumbPath = path.posix.join(relDir, `${baseName}-${viewport}.thumb.webp`)
 
@@ -75,10 +73,8 @@ export async function captureScreenshot(
   const buffer = zoomedOut
     ? await sharp(shot).resize({ width, height, fit: 'fill' }).jpeg({ quality: 82 }).toBuffer()
     : shot
-  await fs.writeFile(path.join(rootDir, filePath), buffer)
-
   // Thumbnail shows the first screen of the page at the viewport's aspect ratio.
-  await sharp(buffer)
+  const thumb = await sharp(buffer)
     .resize({
       width: THUMB_WIDTH,
       height: Math.round((THUMB_WIDTH * viewportHeight) / width),
@@ -86,32 +82,37 @@ export async function captureScreenshot(
       position: 'top',
     })
     .webp({ quality: 75 })
-    .toFile(path.join(rootDir, thumbPath))
+    .toBuffer()
 
-  await writePreviews(buffer, viewport, path.join(rootDir, filePath))
+  await Promise.all([
+    store.put(filePath, buffer, 'image/jpeg'),
+    store.put(thumbPath, thumb, 'image/webp'),
+    writePreviews(buffer, viewport, filePath, store),
+  ])
 
   return { width, height, filePath, thumbPath }
 }
 
 /**
  * Sitemap board previews: the part of the page a full-height frame shows (see
- * MAX_FRAME_HEIGHT), scaled down to each preview size. `capturePath` is the
- * absolute path of the full-page JPEG, which may not exist yet if `source` is
- * its buffer. Each file is written to a temp name first so a request never
- * sees a half-written image.
+ * MAX_FRAME_HEIGHT), scaled down to each preview size. `source` is the
+ * full-page JPEG stored at `captureKey`; the previews are stored next to it.
  */
-export async function writePreviews(source: Buffer | string, viewport: ViewportId, capturePath: string) {
+export async function writePreviews(
+  source: Buffer,
+  viewport: ViewportId,
+  captureKey: string,
+  store: ScreenshotStore,
+) {
   const { width = 0, height = 0 } = await sharp(source).metadata()
   const visibleHeight = (MAX_FRAME_HEIGHT * width) / VIEWPORTS[viewport].frameWidth
   await Promise.all(
     (Object.keys(PREVIEW_WIDTHS) as (keyof typeof PREVIEW_WIDTHS)[]).map(async (size) => {
       const outWidth = Math.min(width, PREVIEW_WIDTHS[size])
       const scale = outWidth / width
-      const outPath = previewPath(capturePath, size)
-      const tmpPath = `${outPath}.${randomUUID()}.tmp.webp`
       // Resizing before cropping lets libvips shrink the JPEG while decoding it,
       // which roughly halves the time for tall pages.
-      await sharp(source)
+      const preview = await sharp(source)
         .resize({ width: outWidth })
         .extract({
           left: 0,
@@ -120,8 +121,8 @@ export async function writePreviews(source: Buffer | string, viewport: ViewportI
           height: Math.min(Math.floor(height * scale), Math.round(visibleHeight * scale)),
         })
         .webp({ quality: 72 })
-        .toFile(tmpPath)
-      await fs.rename(tmpPath, outPath)
+        .toBuffer()
+      await store.put(previewPath(captureKey, size), preview, 'image/webp')
     }),
   )
 }

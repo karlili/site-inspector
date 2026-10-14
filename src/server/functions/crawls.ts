@@ -1,7 +1,5 @@
-import fs from 'node:fs/promises'
-import path from 'node:path'
 import { createServerFn } from '@tanstack/react-start'
-import { asc, desc, eq, sql } from 'drizzle-orm'
+import { asc, desc, eq } from 'drizzle-orm'
 import {
   crawlIdSchema,
   crawlInputSchema,
@@ -15,6 +13,7 @@ import { crawls, links, pages, screenshots } from '../db/schema'
 import {
   cancelCrawl as cancelCrawlJobs,
   createCrawl,
+  deleteCrawl as deleteCrawlJobs,
   expandPage as expandPageJobs,
   listOnlineRunners,
   refetchBranch as refetchBranchJobs,
@@ -23,7 +22,7 @@ import {
   resumeCrawl as resumeCrawlJobs,
 } from '../crawler/jobs'
 import { normalizeUrl } from '../crawler/url'
-import { SCREENSHOT_DIR } from '../paths'
+import { screenshotStore } from '../storage'
 
 export const startCrawl = createServerFn({ method: 'POST' })
   .validator(crawlInputSchema)
@@ -31,7 +30,7 @@ export const startCrawl = createServerFn({ method: 'POST' })
     const rootUrl = normalizeUrl(data.url)
     if (!rootUrl) throw new Error('Invalid URL')
     // Runners pick the root page up from the database; nothing runs in this process.
-    const id = createCrawl(db, {
+    const id = await createCrawl(db, {
       name: data.name,
       rootUrl,
       maxDepth: data.maxDepth,
@@ -45,76 +44,70 @@ export const startCrawl = createServerFn({ method: 'POST' })
 export const renameCrawl = createServerFn({ method: 'POST' })
   .validator(renameCrawlSchema)
   .handler(async ({ data }) => {
-    const renamed = db
+    const [renamed] = await db
       .update(crawls)
       .set({ name: data.name })
       .where(eq(crawls.id, data.crawlId))
       .returning({ name: crawls.name })
-      .get()
     if (!renamed) throw new Error('Crawl not found')
     return renamed
   })
 
 export const listCrawls = createServerFn({ method: 'GET' }).handler(async () => {
-  return db.select().from(crawls).orderBy(desc(crawls.createdAt), desc(sql`rowid`)).all()
+  return db.select().from(crawls).orderBy(desc(crawls.createdAt), desc(crawls.seq))
 })
 
 export const getCrawl = createServerFn({ method: 'GET' })
   .validator(crawlIdSchema)
   .handler(async ({ data }) => {
-    const crawl = db.select().from(crawls).where(eq(crawls.id, data.crawlId)).get()
+    const [crawl] = await db.select().from(crawls).where(eq(crawls.id, data.crawlId))
     if (!crawl) throw new Error('Crawl not found')
-    return {
-      crawl,
-      pages: db
+    const [pageRows, screenshotRows, linkRows] = await Promise.all([
+      db
         .select()
         .from(pages)
         .where(eq(pages.crawlId, data.crawlId))
-        .orderBy(asc(pages.depth), asc(sql`rowid`))
-        .all(),
-      screenshots: db
-        .select()
-        .from(screenshots)
-        .where(eq(screenshots.crawlId, data.crawlId))
-        .all(),
-      links: db.select().from(links).where(eq(links.crawlId, data.crawlId)).all(),
-    }
+        .orderBy(asc(pages.depth), asc(pages.seq)),
+      db.select().from(screenshots).where(eq(screenshots.crawlId, data.crawlId)),
+      db.select().from(links).where(eq(links.crawlId, data.crawlId)),
+    ])
+    return { crawl, pages: pageRows, screenshots: screenshotRows, links: linkRows }
   })
 
 export const cancelCrawl = createServerFn({ method: 'POST' })
   .validator(crawlIdSchema)
   .handler(async ({ data }) => {
-    return { cancelled: cancelCrawlJobs(db, data.crawlId) }
+    return { cancelled: await cancelCrawlJobs(db, data.crawlId) }
   })
 
 export const resumeCrawl = createServerFn({ method: 'POST' })
   .validator(crawlIdSchema)
   .handler(async ({ data }) => {
-    return { queued: resumeCrawlJobs(db, data.crawlId) }
+    return { queued: await resumeCrawlJobs(db, data.crawlId) }
   })
 
 export const refetchCrawl = createServerFn({ method: 'POST' })
   .validator(crawlIdSchema)
   .handler(async ({ data }) => {
-    return { queued: refetchCrawlJobs(db, data.crawlId) }
+    return { queued: await refetchCrawlJobs(db, data.crawlId) }
   })
 
 export const refetchPage = createServerFn({ method: 'POST' })
   .validator(pageRefSchema)
   .handler(async ({ data }) => {
-    return { queued: refetchPageJobs(db, data.crawlId, data.pageId) }
+    return { queued: await refetchPageJobs(db, data.crawlId, data.pageId) }
   })
 
 export const refetchBranch = createServerFn({ method: 'POST' })
   .validator(pageBranchSchema)
   .handler(async ({ data }) => {
-    return { queued: refetchBranchJobs(db, data.crawlId, data.pageIds) }
+    return { queued: await refetchBranchJobs(db, data.crawlId, data.pageIds) }
   })
 
 export const expandPage = createServerFn({ method: 'POST' })
   .validator(expandPageSchema)
   .handler(async ({ data }) => {
-    const result = expandPageJobs(db, data.crawlId, data.pageId, data.levels)
+    const result = await expandPageJobs(db, data.crawlId, data.pageId, data.levels)
     if (!result) throw new Error('Page not found')
     return result
   })
@@ -122,14 +115,16 @@ export const expandPage = createServerFn({ method: 'POST' })
 export const deleteCrawl = createServerFn({ method: 'POST' })
   .validator(crawlIdSchema)
   .handler(async ({ data }) => {
-    cancelCrawlJobs(db, data.crawlId)
-    db.delete(crawls).where(eq(crawls.id, data.crawlId)).run()
-    await fs.rm(path.join(SCREENSHOT_DIR, data.crawlId), { recursive: true, force: true })
+    await deleteCrawlJobs(db, data.crawlId)
+    // Leftover files only cost space; the crawl is gone either way.
+    await screenshotStore()
+      .deletePrefix(`${data.crawlId}/`)
+      .catch((err) => console.error(`Couldn't delete the screenshots of crawl ${data.crawlId}:`, err))
     return { ok: true }
   })
 
 export const listRunners = createServerFn({ method: 'GET' }).handler(async () => {
-  return listOnlineRunners(db).map(({ id, hostname, concurrency, activeJobs }) => ({
+  return (await listOnlineRunners(db)).map(({ id, hostname, concurrency, activeJobs }) => ({
     id,
     hostname,
     concurrency,
