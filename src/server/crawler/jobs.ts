@@ -54,6 +54,8 @@ export interface PageResult {
   title: string | null
   /** Set when the page couldn't be captured; on the root page it fails the whole crawl. */
   error: string | null
+  /** The other site the page redirected to; it was captured, but its links aren't followed. */
+  redirectUrl?: string
   discoveredUrls: string[]
   screenshots: (CapturedScreenshot & { viewport: ViewportId })[]
   /** Root page only: the host the site actually lives on and its robots.txt. */
@@ -176,6 +178,7 @@ export function completePage(
           httpStatus: result.httpStatus,
           title: result.title,
           error: result.error,
+          redirectUrl: result.redirectUrl ?? null,
           leaseExpiresAt: null,
           outlinks: urls,
         })

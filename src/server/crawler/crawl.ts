@@ -95,41 +95,46 @@ export async function capturePage({
             throw new Error(`Not an HTML page (${contentType.split(';')[0]})`)
           }
           const finalUrl = normalizeUrl(page.url())
-          if (!finalUrl || !isSameSite(finalUrl, hostname)) {
+          const offSite = !finalUrl || !isSameSite(finalUrl, hostname)
+          if (offSite && item.depth === 0) {
             throw new Error(`Redirected off-site to ${page.url()}`)
           }
           result.title = (await page.title()) || null
-
-          // The root may redirect (e.g. to www.); follow the site it lands on.
-          // Its robots.txt is read even when the crawl ignores the rules: it
-          // says where the sitemaps are.
-          let sitemapUrls: string[] = []
-          if (item.depth === 0) {
-            const { hostname: host, origin } = new URL(finalUrl)
-            hostname = host
-            result.hostname = hostname
-            const robotsTxt = await fetchRobotsText(origin)
-            result.robotsTxt = crawl.respectRobots ? robotsTxt : null
-            robots = result.robotsTxt ? parseRobots(result.robotsTxt) : undefined
-            sitemapUrls = await fetchSitemapUrls(origin, robotsTxt)
-          }
-
-          // Same-site pages the crawl may visit, normalized and de-duplicated.
-          const crawlable = (raw: string[]) => {
-            const urls = new Set<string>()
-            for (const href of raw) {
-              const url = normalizeUrl(href)
-              if (!url || !isSameSite(url, hostname) || !looksLikeHtml(url)) continue
-              if (robots && !robots.isAllowed(url)) continue
-              urls.add(url)
+          if (offSite) {
+            // Capture the page it lands on, but its links belong to another site.
+            result.redirectUrl = page.url()
+          } else {
+            // The root may redirect (e.g. to www.); follow the site it lands on.
+            // Its robots.txt is read even when the crawl ignores the rules: it
+            // says where the sitemaps are.
+            let sitemapUrls: string[] = []
+            if (item.depth === 0) {
+              const { hostname: host, origin } = new URL(finalUrl)
+              hostname = host
+              result.hostname = hostname
+              const robotsTxt = await fetchRobotsText(origin)
+              result.robotsTxt = crawl.respectRobots ? robotsTxt : null
+              robots = result.robotsTxt ? parseRobots(result.robotsTxt) : undefined
+              sitemapUrls = await fetchSitemapUrls(origin, robotsTxt)
             }
-            return [...urls]
+
+            // Same-site pages the crawl may visit, normalized and de-duplicated.
+            const crawlable = (raw: string[]) => {
+              const urls = new Set<string>()
+              for (const href of raw) {
+                const url = normalizeUrl(href)
+                if (!url || !isSameSite(url, hostname) || !looksLikeHtml(url)) continue
+                if (robots && !robots.isAllowed(url)) continue
+                urls.add(url)
+              }
+              return [...urls]
+            }
+            const hrefs = await page.$$eval('a[href], area[href]', (els) =>
+              els.map((el) => (el as HTMLAnchorElement).href),
+            )
+            result.discoveredUrls = crawlable(hrefs)
+            if (item.depth === 0) result.sitemapUrls = crawlable(sitemapUrls)
           }
-          const hrefs = await page.$$eval('a[href], area[href]', (els) =>
-            els.map((el) => (el as HTMLAnchorElement).href),
-          )
-          result.discoveredUrls = crawlable(hrefs)
-          if (item.depth === 0) result.sitemapUrls = crawlable(sitemapUrls)
         }
 
         const shot = await captureScreenshot(page, viewport, screenshotDir, crawl.id, `${item.id}-${captureId}`)

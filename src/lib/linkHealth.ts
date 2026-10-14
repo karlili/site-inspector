@@ -11,8 +11,9 @@ type HealthLink = { fromPageId: string; toPageId: string }
 
 /**
  * A link to this page is broken: it answered with an error status, or never
- * loaded at all. Pages the crawler chose not to capture (downloads, redirects
- * to other sites) and its own failures (a lost runner) aren't the site's fault.
+ * loaded at all. Pages the crawler chose not to capture (downloads, a start
+ * page that redirects to another site) and its own failures (a lost runner)
+ * aren't the site's fault.
  */
 export function isBrokenTarget(page: Pick<HealthPage, 'status' | 'httpStatus' | 'error'>): boolean {
   if (page.httpStatus != null) return page.httpStatus >= 400

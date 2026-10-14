@@ -1,6 +1,6 @@
 import { Fragment, createContext, memo, useContext } from 'react'
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
-import { CirclePause, ImageOff, Link2Off, Loader2, Maximize2, Split } from 'lucide-react'
+import { CirclePause, CornerUpRight, ImageOff, Link2Off, Loader2, Maximize2, Split } from 'lucide-react'
 import { cn } from '#/lib/utils'
 import { isPageOpen, type PageStatus } from '#/lib/schemas'
 
@@ -11,6 +11,8 @@ export type PageNodeData = {
   status: PageStatus
   httpStatus: number | null
   error: string | null
+  /** The other site this page redirected to; the preview shows that page. */
+  redirectUrl: string | null
   preview: { full: string; small: string } | null
   cropped: boolean
   /** No link leads here from the start page. */
@@ -61,6 +63,29 @@ export function SlashConflictBadge({ path, className }: { path: string; classNam
   )
 }
 
+/** The page sends visitors to another site; what's shown is where they end up. */
+export function RedirectBadge({ url, className }: { url: string; className?: string }) {
+  const label = `Redirects to ${url}`
+  return (
+    <span
+      className={cn('text-muted-foreground border-border flex shrink-0 items-center gap-0.5 border px-1 text-[10px]', className)}
+      title={label}
+      aria-label={label}
+    >
+      <CornerUpRight className="size-2.5" />
+      <span className="max-w-32 truncate">{hostOf(url)}</span>
+    </span>
+  )
+}
+
+function hostOf(url: string) {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return url
+  }
+}
+
 const SIDES = [
   ['top', Position.Top],
   ['right', Position.Right],
@@ -91,6 +116,7 @@ export const PageNode = memo(function PageNode({ id, data, selected }: NodeProps
           <Loader2 className="size-3 shrink-0 animate-spin" aria-label="Capturing" />
         )}
         {badStatus && <span className="bg-destructive shrink-0 px-1 text-[10px] text-white">{data.httpStatus}</span>}
+        {data.redirectUrl && <RedirectBadge url={data.redirectUrl} />}
         {data.orphan && <span className="bg-warning shrink-0 px-1 text-[10px] text-white">Orphan</span>}
         {data.slashConflict && <SlashConflictBadge path={data.path} />}
         {data.brokenLinks > 0 && (

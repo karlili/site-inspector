@@ -20,6 +20,7 @@ const html = (title: string, body: string, viewport = 'width=device-width, initi
 const devicePages: Record<string, (userAgent: string) => string> = {
   '/sniff': (ua) => (/Mobile/.test(ua) ? html('Sniff', '') : html('Sniff', '', 'width=1120')),
   '/fixed': () => html('Fixed', '', 'width=1120'),
+  '/landing': () => html('Landing', '<a href="/elsewhere">Elsewhere</a>'),
 }
 
 // / -> /a, /b, external, pdf ; /a -> /a/deep ; /a/deep -> /a/deeper ; /b -> / , /missing
@@ -56,6 +57,11 @@ beforeAll(async () => {
       res
         .writeHead(200, { 'content-type': 'application/xml' })
         .end(`<urlset>${locs.map((loc) => `<url><loc>${loc}</loc></url>`).join('')}</urlset>`)
+      return
+    }
+    // Sends visitors to another host, as sites do for hosted forms.
+    if (url.pathname === '/away') {
+      res.writeHead(302, { location: `http://localhost:${(server.address() as AddressInfo).port}/landing` }).end()
       return
     }
     const body = site[url.pathname] ?? devicePages[url.pathname]?.(req.headers['user-agent'] ?? '')
@@ -257,6 +263,39 @@ describe('device emulation', () => {
       const desktop = await capture('desktop', '/sniff')
       expect(desktop.seen.userAgent).not.toMatch(/Android|Mobile/)
       expect(desktop.shot.width).toBe(1440)
+    } finally {
+      await browser.close()
+    }
+  })
+})
+
+describe('off-site redirects', () => {
+  it('captures the page a link redirects to without following its links', async () => {
+    const { capturePage, launchBrowser } = await import('./crawl')
+    const { browser, userAgent } = await launchBrowser()
+    type Options = Parameters<typeof capturePage>[0]
+    const capture = (depth: number) =>
+      capturePage({
+        browser,
+        userAgent,
+        crawl: { id: 'redirects', hostname: '127.0.0.1', viewports: ['desktop'], respectRobots: false } as Options['crawl'],
+        page: { id: `away-${depth}`, url: `${baseUrl}/away`, depth } as Options['page'],
+        screenshotDir: path.join(tmp, 'screenshots'),
+      })
+    try {
+      const result = await capture(1)
+      expect(result).toMatchObject({
+        error: null,
+        httpStatus: 200,
+        title: 'Landing',
+        redirectUrl: expect.stringMatching(/^http:\/\/localhost:\d+\/landing$/),
+        discoveredUrls: [],
+      })
+      expect(result.screenshots).toHaveLength(1)
+
+      // The start page redirecting away still fails: there'd be no site left to crawl.
+      const root = await capture(0)
+      expect(root.error).toMatch(/^Redirected off-site to http:\/\/localhost/)
     } finally {
       await browser.close()
     }

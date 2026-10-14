@@ -1,0 +1,1 @@
+ALTER TABLE `pages` ADD `redirect_url` text;

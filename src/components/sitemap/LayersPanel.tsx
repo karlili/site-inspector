@@ -17,7 +17,7 @@ import type { LinkHealth } from '#/lib/linkHealth'
 import type { CrawlDetail } from '#/lib/queries'
 import { isPageOpen } from '#/lib/schemas'
 import { cn } from '#/lib/utils'
-import { SlashConflictBadge } from './PageNode'
+import { RedirectBadge, SlashConflictBadge } from './PageNode'
 import type { BoardModel } from './useBoard'
 
 /** How long the pointer rests on a row before the board zooms to it. */
@@ -339,6 +339,7 @@ export function LayersPanel({
                 {health.orphans.has(id) && (
                   <span className="bg-warning mt-0.5 shrink-0 px-1 text-[10px] text-white">Orphan</span>
                 )}
+                {page.redirectUrl && <RedirectBadge url={page.redirectUrl} className="mt-0.5" />}
                 {slashConflicts.has(id) && <SlashConflictBadge path={frame.path} className="mt-0.5" />}
                 {brokenLinks > 0 && (
                   <span

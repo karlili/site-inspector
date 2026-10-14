@@ -115,6 +115,7 @@ export function SitemapCanvas({
             status: page.status,
             httpStatus: page.httpStatus,
             error: page.error,
+            redirectUrl: page.redirectUrl,
             preview: frame.preview,
             cropped: frame.cropped,
             orphan: health.orphans.has(id),

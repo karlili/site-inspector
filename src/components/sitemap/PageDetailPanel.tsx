@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ExternalLink, Link2Off, RotateCw, Split, X } from 'lucide-react'
+import { CornerUpRight, ExternalLink, Link2Off, RotateCw, Split, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { StatusBadge } from '#/components/StatusBadge'
 import { GoDeeper } from '#/components/sitemap/GoDeeper'
@@ -139,12 +139,35 @@ export function PageDetailPanel({ detail, health, groups, pageId: frameId, viewp
             <RotateCw className={cn(open && 'animate-spin')} />
             {open ? 'Capturing…' : 'Refetch'}
           </Button>
-          <GoDeeper crawlId={crawlId} pageId={pageId} size="xs" disabled={page.status !== 'done'} />
+          <GoDeeper
+            crawlId={crawlId}
+            pageId={pageId}
+            size="xs"
+            disabled={page.status !== 'done' || page.redirectUrl != null}
+          />
         </div>
         {page.error && (
           <p className={cn('text-sm', page.status === 'cancelled' ? 'text-muted-foreground' : 'text-destructive')}>
             {page.error}
           </p>
+        )}
+        {page.redirectUrl && (
+          <div className="border-border text-muted-foreground border-l-2 pl-2 text-xs">
+            <p className="text-foreground flex items-center gap-1 font-medium">
+              <CornerUpRight className="size-3.5" />
+              Redirects to another site:
+            </p>
+            <a
+              href={page.redirectUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 break-all hover:underline"
+            >
+              {page.redirectUrl}
+              <ExternalLink className="size-3 shrink-0" />
+            </a>
+            <p className="mt-1">The screenshots show that page; its links aren't followed.</p>
+          </div>
         )}
         {health.orphans.has(frameId) && (
           <p className="border-warning text-warning border-l-2 pl-2 text-xs">

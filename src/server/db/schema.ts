@@ -51,6 +51,8 @@ export const pages = sqliteTable(
     httpStatus: integer('http_status'),
     status: text({ enum: pageStatuses }).notNull().default('pending'),
     error: text(),
+    /** The other site this page redirected to; its screenshots show that page. */
+    redirectUrl: text('redirect_url'),
     posX: real('pos_x'),
     posY: real('pos_y'),
     /** Each page is a job: the runner holding it and until when its lease is valid. */
