@@ -15,7 +15,7 @@ export interface S3StoreOptions {
   region: string
   /** For services other than AWS, e.g. `https://<account>.r2.cloudflarestorage.com`. */
   endpoint?: string
-  /** `bucket.host/key` URLs don't work with MinIO and some self-hosted services. */
+  /** `bucket.host/key` URLs don't work with SeaweedFS, MinIO and some self-hosted services. */
   forcePathStyle?: boolean
   credentials?: { accessKeyId: string; secretAccessKey: string }
 }

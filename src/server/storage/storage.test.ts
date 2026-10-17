@@ -11,9 +11,9 @@ afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
 
 /**
  * The S3 store runs against a real S3-compatible service when one is
- * configured, e.g. MinIO from docker-compose.yml:
- * TEST_S3_ENDPOINT=http://localhost:9000 TEST_S3_BUCKET=site-inspector-test
- * TEST_S3_ACCESS_KEY_ID=minioadmin TEST_S3_SECRET_ACCESS_KEY=minioadmin
+ * configured, e.g. SeaweedFS from docker-compose.yml:
+ * TEST_S3_ENDPOINT=http://localhost:8333 TEST_S3_BUCKET=site-inspector-test
+ * TEST_S3_ACCESS_KEY_ID=seaweedfsadmin TEST_S3_SECRET_ACCESS_KEY=seaweedfsadmin
  */
 const s3 = process.env.TEST_S3_BUCKET
   ? {

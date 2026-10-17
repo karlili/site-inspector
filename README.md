@@ -11,10 +11,12 @@ TanStack Start (Router, Query, server functions) · TypeScript · Zod · Drizzle
 ```bash
 pnpm install
 pnpm playwright:install   # downloads Chromium and its system libraries
-docker compose up -d      # Postgres on :5432 (and MinIO on :9000, if you want to try bucket storage)
+docker compose up -d      # Postgres on :5432; screenshots use local disk by default
 pnpm dev                  # admin UI on http://localhost:3000
 pnpm runner               # in another terminal: captures the pages
 ```
+
+To try S3-compatible storage locally, start SeaweedFS (S3 API on :8333) with `docker compose --profile s3 up -d`.
 
 The admin only queues crawls; a separate **runner** process does the crawling. Run as many runners as you like against the same database and screenshot store and they share the work page by page.
 
@@ -34,8 +36,8 @@ Set these in the environment of the admin server **and** every runner, or copy `
 | `S3_BUCKET` | | Bucket for `s3` storage (required) |
 | `S3_PREFIX` | | Folder inside the bucket, e.g. `site-inspector` |
 | `S3_REGION` | `$AWS_REGION` or `us-east-1` | Region; `auto` for Cloudflare R2 |
-| `S3_ENDPOINT` | AWS | Endpoint for other services, e.g. `https://<account>.r2.cloudflarestorage.com`, `https://storage.googleapis.com`, `http://localhost:9000` |
-| `S3_FORCE_PATH_STYLE` | `false` | `true` for MinIO and other services without per-bucket hostnames |
+| `S3_ENDPOINT` | AWS | Endpoint for other services, e.g. `https://<account>.r2.cloudflarestorage.com`, `https://storage.googleapis.com`, `http://localhost:8333` |
+| `S3_FORCE_PATH_STYLE` | `false` | `true` for SeaweedFS, MinIO and other services without per-bucket hostnames |
 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | | Keys for the bucket. Unset, the AWS SDK's usual credential chain applies (`AWS_ACCESS_KEY_ID`, `AWS_PROFILE`, instance and task roles…) |
 
 With `s3` storage the bucket stays private: the admin server reads each image and serves it under `/screenshots/…` as before, with a year-long immutable cache header. Google Cloud Storage works through its S3-compatible XML API with [HMAC keys](https://cloud.google.com/storage/docs/authentication/hmackeys). Since runners then share nothing but Postgres and the bucket, they can run on any machine; with `local` storage they must share the screenshot directory (the same host or a shared volume).
@@ -58,7 +60,7 @@ It copies crawls, pages, links, screenshots and settings, skipping crawls alread
 | `pnpm dev` | Dev server on port 3000 |
 | `pnpm build` / `pnpm start` | Production build, then run `.output/server/index.mjs` |
 | `pnpm runner` | Start a crawl runner. It captures as many pages at once as **Settings → Slots per runner** says (default 3); `RUNNER_CONCURRENCY` pins a fixed number for that runner instead. `RUNNER_ID` names it (default `host-pid-random`). Ctrl+C finishes in-flight pages first; press it again to quit immediately |
-| `pnpm test` | Vitest: URL/robots units, the job queue (including several processes racing for pages), screenshot storage, and a two-runner crawl of a local fixture site. Needs a Postgres server: each test file creates (and drops) its own database on `TEST_DATABASE_URL` (default: `DATABASE_URL`, else the local one from `docker-compose.yml`). Set `TEST_S3_BUCKET` (plus `TEST_S3_ENDPOINT`, `TEST_S3_ACCESS_KEY_ID`, `TEST_S3_SECRET_ACCESS_KEY`) to also run the storage tests against a bucket, e.g. the compose MinIO |
+| `pnpm test` | Vitest: URL/robots units, the job queue (including several processes racing for pages), screenshot storage, and a two-runner crawl of a local fixture site. Needs a Postgres server: each test file creates (and drops) its own database on `TEST_DATABASE_URL` (default: `DATABASE_URL`, else the local one from `docker-compose.yml`). Set `TEST_S3_BUCKET` (plus `TEST_S3_ENDPOINT`, `TEST_S3_ACCESS_KEY_ID`, `TEST_S3_SECRET_ACCESS_KEY`) to also run the storage tests against a bucket, e.g. the compose SeaweedFS |
 | `pnpm typecheck` | Regenerates the route tree and runs `tsc` |
 | `pnpm lint:corners` | Fails if any `rounded-*` class other than `rounded-none` shows up in `src/` |
 | `pnpm db:generate` | Generate a migration after editing `src/server/db/schema.ts` |

@@ -24,7 +24,7 @@ export type StorageDriver = 'local' | 's3'
 /**
  * The store picked by the environment: local disk under SCREENSHOT_DIR unless
  * STORAGE_DRIVER=s3, which stores them in an S3-compatible bucket (AWS S3,
- * Cloudflare R2, Google Cloud Storage's XML API, MinIO, …). See the README.
+ * Cloudflare R2, Google Cloud Storage's XML API, MinIO, SeaweedFS, …). See the README.
  */
 export function storeFromEnv(env: NodeJS.ProcessEnv = process.env): ScreenshotStore {
   const driver = (env.STORAGE_DRIVER || 'local').toLowerCase()

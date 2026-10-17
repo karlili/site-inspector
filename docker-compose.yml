@@ -11,31 +11,46 @@ services:
     volumes:
       - postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      test: [ 'CMD-SHELL', 'pg_isready -U postgres' ]
       interval: 2s
       retries: 15
 
-  # Optional: an S3-compatible bucket for STORAGE_DRIVER=s3 (console on http://localhost:9001).
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address :9001
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+  # Optional: an S3-compatible bucket for STORAGE_DRIVER=s3 (S3 API on :8333, file browser on http://localhost:8888).
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    profiles: [ s3 ]
+    command: server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json
+    configs:
+      - source: seaweedfs-s3
+        target: /etc/seaweedfs/s3.json
     ports:
-      - '9000:9000'
-      - '9001:9001'
+      - '8333:8333'
+      - '8888:8888'
     volumes:
-      - minio:/data
+      - seaweedfs:/data
 
-  # Creates the `site-inspector` bucket once MinIO is up.
-  minio-bucket:
-    image: minio/mc:latest
-    depends_on: [minio]
+  # Creates the `site-inspector` bucket once SeaweedFS is up.
+  seaweedfs-bucket:
+    image: chrislusf/seaweedfs:latest
+    profiles: [ s3 ]
+    depends_on: [ seaweedfs ]
     entrypoint: >
-      /bin/sh -c "until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done;
-      mc mb --ignore-existing local/site-inspector"
+      /bin/sh -c "until echo 's3.bucket.list' | weed shell -master=seaweedfs:9333 2>/dev/null | grep -q site-inspector; do echo 's3.bucket.create -name site-inspector' | weed shell -master=seaweedfs:9333 >/dev/null 2>&1; sleep 1; done; echo 'bucket site-inspector ready'"
 
 volumes:
   postgres:
-  minio:
+  seaweedfs:
+
+configs:
+  # Without credentials SeaweedFS accepts anonymous requests; these match .env.example.
+  seaweedfs-s3:
+    content: |
+      {
+        "identities": [
+          {
+            "name": "admin",
+            "credentials": [{ "accessKey": "seaweedfsadmin", "secretKey": "seaweedfsadmin" }],
+            "actions": ["Admin", "Read", "List", "Tagging", "Write"]
+          }
+        ]
+      }
