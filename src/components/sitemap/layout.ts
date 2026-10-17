@@ -186,3 +186,69 @@ export function sectionBounds(frames: Rect[]): Rect {
     height: bottom - top + SECTION_PAD_TOP + SECTION_PAD_BOTTOM + SECTION_TITLE_SPACE,
   }
 }
+
+/** Space between the focused frame and the columns either side, so the links have room. */
+const LINK_GAP = 6 * COLUMN_GAP
+
+/**
+ * One page's links: the page stays at `anchor`, pages linking to it stack in
+ * columns on its left and pages it links to on its right. Columns fill
+ * top-down, nearest the page first, and the row count is chosen so the whole
+ * group comes out roughly `targetAspect`-shaped. `bounds` includes the frames'
+ * label space.
+ */
+export function layoutLinkFocus(
+  centerId: string,
+  incoming: string[],
+  outgoing: string[],
+  sizeOf: (id: string) => { width: number; height: number },
+  anchor: { x: number; y: number },
+  targetAspect = 16 / 10,
+): { positions: Map<string, { x: number; y: number }>; bounds: Rect } {
+  const center = sizeOf(centerId)
+  const cellWidth = Math.max(0, ...[...incoming, ...outgoing].map((id) => sizeOf(id).width))
+  const middle = anchor.y + center.height / 2
+
+  const placeSide = (ids: string[], rows: number, side: 'left' | 'right', into: Map<string, { x: number; y: number }>) => {
+    if (!ids.length) return
+    const used = Math.min(rows, ids.length)
+    const rowHeights = Array.from({ length: used }, () => 0)
+    ids.forEach((id, i) => (rowHeights[i % rows] = Math.max(rowHeights[i % rows], sizeOf(id).height)))
+    const rowTops: number[] = []
+    let y = middle - (rowHeights.reduce((a, b) => a + b, 0) + (used - 1) * ROW_GAP) / 2
+    for (const h of rowHeights) {
+      rowTops.push(y)
+      y += h + ROW_GAP
+    }
+    ids.forEach((id, i) => {
+      const column = Math.floor(i / rows)
+      const x =
+        side === 'right'
+          ? anchor.x + center.width + LINK_GAP + column * (cellWidth + COLUMN_GAP)
+          : anchor.x - LINK_GAP - cellWidth - column * (cellWidth + COLUMN_GAP)
+      into.set(id, { x, y: rowTops[i % rows] })
+    })
+  }
+
+  // Even around the page, so fitting the bounds puts it in the middle of the screen.
+  const centerX = anchor.x + center.width / 2
+  const centerY = anchor.y + (center.height - FRAME_LABEL_SPACE) / 2
+  const boundsOf = (positions: Map<string, { x: number; y: number }>): Rect => {
+    const rects = [...positions].map(([id, p]) => ({ ...p, ...sizeOf(id) }))
+    const halfWidth = Math.max(...rects.flatMap((r) => [centerX - r.x, r.x + r.width - centerX]))
+    const halfHeight = Math.max(...rects.flatMap((r) => [centerY - (r.y - FRAME_LABEL_SPACE), r.y + r.height - centerY]))
+    return { x: centerX - halfWidth, y: centerY - halfHeight, width: 2 * halfWidth, height: 2 * halfHeight }
+  }
+
+  // Try every row count and keep the group closest to the target shape.
+  let best: { positions: Map<string, { x: number; y: number }>; bounds: Rect; score: number } | null = null
+  for (let rows = 1; rows <= Math.max(1, incoming.length, outgoing.length); rows++) {
+    const positions = new Map([[centerId, { ...anchor }]])
+    placeSide(incoming, rows, 'left', positions)
+    placeSide(outgoing, rows, 'right', positions)
+    const bounds = boundsOf(positions)
+    const score = Math.abs(Math.log(bounds.width / Math.max(bounds.height, 1) / targetAspect))
+    if (!best || score < best.score - 1e-9) best = { positions, bounds, score }
+  }
+  return { positions: best!.positions, bounds: best!.bounds }
+}

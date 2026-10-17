@@ -165,6 +165,12 @@
 .sitemap-board .react-flow__node-page.frame-dimmed {
   opacity: 0.2;
 }
+/* Pages outside the link focus view. */
+.sitemap-board .react-flow__node-page.frame-faded {
+  opacity: 0;
+  pointer-events: none;
+  transition-duration: 300ms;
+}
 .frame-label,
 .section-title {
   position: absolute;

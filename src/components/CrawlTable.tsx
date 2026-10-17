@@ -2,6 +2,7 @@ import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-q
 import { Link } from '@tanstack/react-router'
 import { Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { ProgressBar, progressSummary } from '#/components/QueueSheet'
 import { StatusBadge } from '#/components/StatusBadge'
 import { Button } from '#/components/ui/button'
 import {
@@ -62,6 +63,14 @@ export function CrawlTable() {
               </TableCell>
               <TableCell>
                 <StatusBadge status={crawl.status} />
+                {crawl.progress && (
+                  <div className="mt-1.5 grid w-32 gap-1" title={progressSummary(crawl.progress)}>
+                    <ProgressBar counts={crawl.progress} />
+                    <span className="text-muted-foreground truncate text-xs tabular-nums">
+                      {progressSummary(crawl.progress, { short: true })}
+                    </span>
+                  </div>
+                )}
               </TableCell>
               <TableCell className="text-right tabular-nums">{crawl.maxDepth}</TableCell>
               <TableCell className="text-right tabular-nums">{crawl.pageCount}</TableCell>

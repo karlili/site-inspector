@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   Controls,
   MarkerType,
   MiniMap,
   ReactFlow,
   getNodesBounds,
+  getViewportForBounds,
   useNodesState,
   useReactFlow,
   useStore,
@@ -12,13 +13,15 @@ import {
   type Node,
   type NodeChange,
   type Rect,
+  type Viewport,
+  type XYPosition,
 } from '@xyflow/react'
 import type { LinkHealth } from '#/lib/linkHealth'
 import type { CrawlDetail } from '#/lib/queries'
 import { isPageOpen } from '#/lib/schemas'
 import { useTheme } from '#/lib/theme'
 import { cn } from '#/lib/utils'
-import { sectionBounds } from './layout'
+import { layoutLinkFocus, sectionBounds } from './layout'
 import { BoardActionsContext, PageNode, type PageNodeType } from './PageNode'
 import { SectionNode, type SectionNodeType } from './SectionNode'
 import type { BoardModel } from './useBoard'
@@ -34,6 +37,14 @@ const LABEL_MIN_ZOOM = 0.14
 const FULL_PREVIEW_ZOOM = 0.3
 /** Gap kept between a section title and the next section's title. */
 const TITLE_GAP = 48
+/** How long frames take to move into or out of the link focus layout. */
+const LAYOUT_DURATION = 450
+/** The link focus view zooms in no closer than a single focused page does. */
+const FOCUS_MAX_ZOOM = 0.6
+
+const prefersReducedMotion = () =>
+  typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2)
 
 export type FocusRequest = { pageId: string } | { pageIds: string[] } | { sectionId: string }
 
@@ -43,7 +54,10 @@ interface Props {
   health: LinkHealth
   /** Frames whose URL shows a different page with a trailing slash than without. */
   slashConflicts: Set<string>
+  /** With a page selected too, lays out just that page and its links. */
   showLinks: boolean
+  /** The canvas's width:height, which the link focus layout aims for. */
+  aspect: number
   /** Bumped by the parent when it re-runs the auto layout. */
   layoutVersion: number
   selectedPageId: string | null
@@ -64,6 +78,7 @@ export function SitemapCanvas({
   health,
   slashConflicts,
   showLinks,
+  aspect,
   layoutVersion,
   selectedPageId,
   previewPageId,
@@ -79,8 +94,51 @@ export function SitemapCanvas({
   const userMovedViewport = useRef(false)
   // What the board last zoomed to, kept centred while the side panels resize it.
   const lastFocus = useRef<FocusRequest | null>(null)
-  const { fitView } = useReactFlow()
+  // The link focus view is framed, until the user pans or zooms.
+  const focusFramed = useRef(false)
+  const { fitView, getViewport, setViewport } = useReactFlow()
   const { resolvedTheme } = useTheme()
+  const framesRef = useRef(frames)
+  framesRef.current = frames
+
+  // With links on and a page selected, that page stays where it is and the
+  // pages linking to it line up on its left, the pages it links to on its
+  // right. A page linking both ways counts as outgoing.
+  const anchor = useRef<{ pageId: string; at: XYPosition } | null>(null)
+  const linkFocus = useMemo(() => {
+    if (!showLinks || !selectedPageId || !board.frames.has(selectedPageId)) {
+      anchor.current = null
+      return null
+    }
+    // Anchored where the frame is on screen now, so switching pages doesn't jump.
+    if (anchor.current?.pageId !== selectedPageId) {
+      const at = framesRef.current.find((f) => f.id === selectedPageId)?.position ?? board.positions.get(selectedPageId)!
+      anchor.current = { pageId: selectedPageId, at }
+    }
+    const outgoing = new Set<string>()
+    const incoming = new Set<string>()
+    for (const link of links) {
+      if (link.fromPageId === link.toPageId) continue
+      if (link.fromPageId === selectedPageId && board.frames.has(link.toPageId)) outgoing.add(link.toPageId)
+      if (link.toPageId === selectedPageId && board.frames.has(link.fromPageId)) incoming.add(link.fromPageId)
+    }
+    const byNumber = (a: string, b: string) => board.numbers.get(a)! - board.numbers.get(b)!
+    const layout = layoutLinkFocus(
+      selectedPageId,
+      [...incoming].filter((id) => !outgoing.has(id)).sort(byNumber),
+      [...outgoing].sort(byNumber),
+      (id) => board.frames.get(id)!,
+      anchor.current.at,
+      aspect,
+    )
+    return { pageId: selectedPageId, ids: new Set(layout.positions.keys()), ...layout }
+  }, [showLinks, selectedPageId, board, links, aspect])
+  const linkFocusRef = useRef(linkFocus)
+  linkFocusRef.current = linkFocus
+
+  const targets = linkFocus?.positions ?? board.positions
+  const targetsRef = useRef(targets)
+  targetsRef.current = targets
 
   useEffect(() => {
     userMovedViewport.current = false
@@ -95,14 +153,16 @@ export function SitemapCanvas({
   }, [frameWidth])
 
   useEffect(() => {
-    setFrames(
-      board.order.map((id) => {
+    // Frames already on the board keep their place; the effect below moves them.
+    setFrames((prev) => {
+      const current = new Map(prev.map((f) => [f.id, f.position]))
+      return board.order.map((id) => {
         const frame = board.frames.get(id)!
         const { page } = frame
         return {
           id,
           type: 'page',
-          position: board.positions.get(id)!,
+          position: current.get(id) ?? targetsRef.current.get(id)!,
           // Sizes are known up front; setting `measured` too lets fitView run without
           // waiting for React Flow to measure frames that aren't rendered.
           width: frame.width,
@@ -123,9 +183,51 @@ export function SitemapCanvas({
             slashConflict: slashConflicts.has(id),
           },
         }
-      }),
-    )
+      })
+    })
   }, [board, health, slashConflicts, setFrames, layoutVersion])
+
+  // Frames glide into and out of the link focus layout; anything else (a
+  // running crawl growing the board, Re-layout) puts them straight in place.
+  const focusKey = linkFocus?.pageId ?? null
+  const lastFocusKey = useRef(focusKey)
+  const [animating, setAnimating] = useState(false)
+  useEffect(() => {
+    const keyChanged = lastFocusKey.current !== focusKey
+    lastFocusKey.current = focusKey
+    if (!keyChanged || prefersReducedMotion()) {
+      setFrames((prev) =>
+        prev.map((f) => {
+          const to = targets.get(f.id)
+          return to && (to.x !== f.position.x || to.y !== f.position.y) ? { ...f, position: to } : f
+        }),
+      )
+      return
+    }
+    const from = new Map(framesRef.current.map((f) => [f.id, f.position]))
+    const start = performance.now()
+    let raf = 0
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / LAYOUT_DURATION)
+      const e = easeInOutCubic(t)
+      setFrames((prev) =>
+        prev.map((f) => {
+          const to = targets.get(f.id)
+          if (!to) return f
+          const at = from.get(f.id) ?? to
+          return { ...f, position: { x: at.x + (to.x - at.x) * e, y: at.y + (to.y - at.y) * e } }
+        }),
+      )
+      if (t < 1) raf = requestAnimationFrame(tick)
+      else setAnimating(false)
+    }
+    setAnimating(true)
+    raf = requestAnimationFrame(tick)
+    return () => {
+      cancelAnimationFrame(raf)
+      setAnimating(false)
+    }
+  }, [targets, focusKey, setFrames])
 
   // Selection, preview and search dimming only touch the frames whose state changed.
   useEffect(() => {
@@ -133,17 +235,23 @@ export function SitemapCanvas({
       prev.map((node) => {
         const selected = node.id === selectedPageId
         const className =
-          cn(highlightIds && !highlightIds.has(node.id) && 'frame-dimmed', node.id === previewPageId && 'frame-previewed') ||
-          undefined
+          cn(
+            linkFocus && !linkFocus.ids.has(node.id) && 'frame-faded',
+            highlightIds && !highlightIds.has(node.id) && 'frame-dimmed',
+            node.id === previewPageId && 'frame-previewed',
+          ) || undefined
         return node.selected === selected && node.className === className
           ? node
           : { ...node, selected, className }
       }),
     )
     // board/health/layoutVersion: the frames were just rebuilt without selection state.
-  }, [board, health, layoutVersion, selectedPageId, previewPageId, highlightIds, setFrames])
+  }, [board, health, layoutVersion, selectedPageId, previewPageId, highlightIds, linkFocus, setFrames])
 
+  // Sections only make sense on the board layout; they come back once the frames have.
+  const hideSections = !!linkFocus || animating
   const sections = useMemo<SectionNodeType[]>(() => {
+    if (hideSections) return []
     const byId = new Map(frames.map((f) => [f.id, f]))
     const boxes = board.sectionInfo.flatMap((section) => {
       const rects = section.pageIds.flatMap((id) => {
@@ -180,7 +288,7 @@ export function SitemapCanvas({
         parentOpen: !!section.parent && isPageOpen(section.parent.page.status),
       },
     }))
-  }, [board, frames])
+  }, [board, frames, hideSections])
 
   // Sections first so frames paint on top of them.
   const nodes = useMemo<Node[]>(() => [...sections, ...frames], [sections, frames])
@@ -197,7 +305,7 @@ export function SitemapCanvas({
   )
 
   useEffect(() => {
-    if (userMovedViewport.current) return
+    if (userMovedViewport.current || linkFocusRef.current) return
     // Wait a frame so React Flow has the new nodes.
     const frame = requestAnimationFrame(() => fitView({ padding: 0.06, maxZoom: 1, duration: 200 }))
     return () => cancelAnimationFrame(frame)
@@ -220,22 +328,72 @@ export function SitemapCanvas({
     (request: FocusRequest) => {
       userMovedViewport.current = true
       lastFocus.current = request
+      focusFramed.current = false
       fitTo(request, 400)
     },
     [fitTo],
   )
 
+  // In the link focus view only its own frames can be brought into view; the
+  // selected page is framed together with its links below.
   useEffect(() => {
-    if (focusRequest) focus(focusRequest)
+    if (!focusRequest) return
+    const shown = linkFocusRef.current
+    if (!shown) return focus(focusRequest)
+    if ('pageId' in focusRequest) {
+      if (focusRequest.pageId !== shown.pageId && shown.ids.has(focusRequest.pageId)) focus(focusRequest)
+    } else if ('pageIds' in focusRequest) {
+      const pageIds = focusRequest.pageIds.filter((id) => shown.ids.has(id))
+      if (pageIds.length) focus({ pageIds })
+    }
   }, [focusRequest, focus])
 
   // Opening, closing or dragging a side panel changes the canvas size: keep
   // whatever the board was zoomed to in view, unless the user has moved since.
   const paneWidth = useStore((s) => s.width)
   const paneHeight = useStore((s) => s.height)
+
+  // Fits the link focus layout where its frames are headed, so the view moves along with them.
+  const fitLinkFocus = useCallback(
+    (duration: number) => {
+      const shown = linkFocusRef.current
+      if (!shown || !paneWidth || !paneHeight) return
+      setViewport(getViewportForBounds(shown.bounds, paneWidth, paneHeight, 0.02, FOCUS_MAX_ZOOM, 0.1), { duration })
+    },
+    [paneWidth, paneHeight, setViewport],
+  )
+
+  // Entering the link focus view remembers the view to come back to when leaving it.
+  const beforeLinkFocus = useRef<{ viewport: Viewport; lastFocus: FocusRequest | null; userMoved: boolean } | null>(null)
+  useEffect(() => {
+    const duration = prefersReducedMotion() ? 0 : LAYOUT_DURATION
+    if (focusKey) {
+      beforeLinkFocus.current ??= {
+        viewport: getViewport(),
+        lastFocus: lastFocus.current,
+        userMoved: userMovedViewport.current,
+      }
+      userMovedViewport.current = true
+      lastFocus.current = null
+      focusFramed.current = true
+      fitLinkFocus(duration)
+    } else if (beforeLinkFocus.current) {
+      const saved = beforeLinkFocus.current
+      beforeLinkFocus.current = null
+      userMovedViewport.current = saved.userMoved
+      lastFocus.current = saved.lastFocus
+      focusFramed.current = false
+      setViewport(saved.viewport, { duration })
+    }
+    // Only when the focused page or the frame size changes, not as a running crawl adds links.
+  }, [focusKey, frameWidth])
+
   useEffect(() => {
     if (!paneWidth || !paneHeight) return
-    if (lastFocus.current) fitTo(lastFocus.current, 150)
+    if (linkFocusRef.current) {
+      if (focusFramed.current) fitLinkFocus(150)
+      else if (lastFocus.current) fitTo(lastFocus.current, 150)
+    } else if (lastFocus.current) fitTo(lastFocus.current, 150)
     else if (!userMovedViewport.current) fitView({ padding: 0.06, maxZoom: 1 })
   }, [paneWidth, paneHeight, fitTo, fitView])
 
@@ -309,6 +467,7 @@ export function SitemapCanvas({
           if (event) {
             userMovedViewport.current = true
             lastFocus.current = null
+            focusFramed.current = false
           }
         }}
         // Frames are read-only snapshots: they can be clicked and opened, never moved.
@@ -329,7 +488,7 @@ export function SitemapCanvas({
       >
         <ZoomScale />
         <Controls showInteractive={false} />
-        <OverviewMap bounds={bounds} selectedPageId={selectedPageId} />
+        {!hideSections && <OverviewMap bounds={bounds} selectedPageId={selectedPageId} />}
       </ReactFlow>
     </BoardActionsContext.Provider>
   )

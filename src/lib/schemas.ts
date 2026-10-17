@@ -63,9 +63,24 @@ export const DEFAULT_RUNNER_SETTINGS = runnerSettingsSchema.parse({})
 export const crawlStatuses = ['queued', 'running', 'done', 'failed', 'cancelled'] as const
 export type CrawlStatus = (typeof crawlStatuses)[number]
 
+/** Waiting for runners, or being worked through by them. */
+export const isActive = (status: CrawlStatus) => status === 'queued' || status === 'running'
+
 /** `cancelled`: interrupted by Stop or an aborted crawl; Resume picks it up again. */
 export const pageStatuses = ['pending', 'running', 'done', 'failed', 'cancelled'] as const
 export type PageStatus = (typeof pageStatuses)[number]
 
 /** Waiting for a runner, or being captured by one. */
 export const isPageOpen = (status: PageStatus) => status === 'pending' || status === 'running'
+
+/** How many of a crawl's pages are in each status. */
+export type PageCounts = Record<PageStatus, number>
+
+export const countPages = (rows: { status: PageStatus }[]): PageCounts => {
+  const counts: PageCounts = { pending: 0, running: 0, done: 0, failed: 0, cancelled: 0 }
+  for (const row of rows) counts[row.status]++
+  return counts
+}
+
+/** Lists the queue of every active crawl, or of one crawl. */
+export const queueSchema = z.object({ crawlId: z.string().min(1).optional() })

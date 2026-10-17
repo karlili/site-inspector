@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { and, count, eq, gt, inArray, lt, notInArray, or, sql } from 'drizzle-orm'
-import type { CrawlInput, RunnerSettings } from '#/lib/schemas'
+import { countPages, type CrawlInput, type PageCounts, type RunnerSettings } from '#/lib/schemas'
 import type { ViewportId } from '#/lib/viewports'
 import type { Db } from '../db/client'
 import { crawls, links, pages, runners, screenshots, type Crawl, type Page } from '../db/schema'
@@ -523,6 +523,110 @@ export function listOnlineRunners(db: Db, now = Date.now()) {
     .from(runners)
     .where(gt(runners.lastSeenAt, new Date(now - RUNNER_OFFLINE_MS)))
     .orderBy(runners.startedAt)
+}
+
+/** How many pages of each crawl are in each status. */
+export async function countCrawlPages(db: Db | Tx, crawlIds: string[]): Promise<Map<string, PageCounts>> {
+  const counts = new Map(crawlIds.map((id) => [id, countPages([])]))
+  if (crawlIds.length === 0) return counts
+  const rows = await db
+    .select({ crawlId: pages.crawlId, status: pages.status, n: count() })
+    .from(pages)
+    .where(inArray(pages.crawlId, crawlIds))
+    .groupBy(pages.crawlId, pages.status)
+  for (const { crawlId, status, n } of rows) counts.get(crawlId)![status] = n
+  return counts
+}
+
+export interface QueuedPage {
+  id: string
+  url: string
+  depth: number
+  /** Times it has been claimed; above 0 on a waiting page, a runner lost it before. */
+  attempts: number
+}
+
+export interface CrawlQueue {
+  crawl: Pick<Crawl, 'id' | 'name' | 'rootUrl' | 'status'>
+  counts: PageCounts
+  /** The shallowest level with pages still open; nothing deeper is handed out until it's done. */
+  level: number | null
+  /** Pages runners are capturing now, with the host of the runner holding each. */
+  running: (QueuedPage & { runnerId: string | null; runnerHost: string | null })[]
+  /** The first waiting pages, in the order runners will claim them. */
+  waiting: QueuedPage[]
+}
+
+/**
+ * What runners are capturing and what's waiting for them, for every active
+ * crawl (or just `crawlId`), oldest crawl first as runners serve them. Lists
+ * at most `limit` waiting pages per crawl; `counts` has the full numbers.
+ */
+export function listQueue(
+  db: Db,
+  { crawlId, limit = 200 }: { crawlId?: string; limit?: number } = {},
+): Promise<CrawlQueue[]> {
+  // One snapshot, so the counts agree with the lists.
+  return db.transaction(
+    async (tx) => {
+      const active = await tx
+        .select({ id: crawls.id, name: crawls.name, rootUrl: crawls.rootUrl, status: crawls.status })
+        .from(crawls)
+        .where(and(inArray(crawls.status, ACTIVE_CRAWL), crawlId ? eq(crawls.id, crawlId) : undefined))
+        .orderBy(crawls.createdAt, crawls.seq)
+      if (active.length === 0) return []
+      const ids = active.map((c) => c.id)
+
+      // One after another: the transaction has a single connection.
+      const counts = await countCrawlPages(tx, ids)
+      const running = await tx
+        .select({
+          id: pages.id,
+          crawlId: pages.crawlId,
+          url: pages.url,
+          depth: pages.depth,
+          attempts: pages.attempts,
+          runnerId: pages.claimedBy,
+          runnerHost: runners.hostname,
+        })
+        .from(pages)
+        .leftJoin(runners, eq(runners.id, pages.claimedBy))
+        .where(and(inArray(pages.crawlId, ids), eq(pages.status, 'running')))
+        .orderBy(pages.depth, pages.seq)
+      const { rows: waiting } = await tx.execute<{
+        id: string
+        crawl_id: string
+        url: string
+        depth: number
+        attempts: number
+      }>(sql`
+        select id, crawl_id, url, depth, attempts from (
+          select p.id, p.crawl_id, p.url, p.depth, p.attempts, p.seq,
+            row_number() over (partition by p.crawl_id order by p.depth, p.seq) as position
+          from ${pages} p
+          where p.status = 'pending'
+            and p.crawl_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+        ) w
+        where position <= ${limit}
+        order by depth, seq`)
+
+      return active.map((crawl): CrawlQueue => {
+        const own = running.filter((p) => p.crawlId === crawl.id).map(({ crawlId: _, ...p }) => p)
+        const queued = waiting
+          .filter((p) => p.crawl_id === crawl.id)
+          .map(({ id, url, depth, attempts }) => ({ id, url, depth, attempts }))
+        const depths = [...own, ...queued].map((p) => p.depth)
+        return {
+          crawl,
+          counts: counts.get(crawl.id)!,
+          level: depths.length ? Math.min(...depths) : null,
+          running: own,
+          waiting: queued,
+        }
+      })
+    },
+    { isolationLevel: 'repeatable read', accessMode: 'read only' },
+  )
 }
 
 /**

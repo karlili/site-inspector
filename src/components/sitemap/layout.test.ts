@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ROOT_SECTION, SITEMAP_SECTION, layoutBoard, sectionBounds, type BoardPage } from './layout'
+import { ROOT_SECTION, SITEMAP_SECTION, layoutBoard, layoutLinkFocus, sectionBounds, type BoardPage } from './layout'
 
 const size = { width: 288, height: 400 }
 const sizesFor = (pages: BoardPage[]) => new Map(pages.map((p) => [p.id, size]))
@@ -106,5 +106,53 @@ describe('layoutBoard', () => {
     const board = layoutBoard([], new Map())
     expect(board.order).toEqual([])
     expect(board.sections).toEqual([])
+  })
+})
+
+describe('layoutLinkFocus', () => {
+  const sizeOf = () => size
+  const anchor = { x: 1000, y: 500 }
+  const ids = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i}`)
+  const allPlaced = (positions: Map<string, { x: number; y: number }>) => [...positions.values()]
+
+  it('keeps the page in place with incoming links on its left and outgoing on its right', () => {
+    const { positions } = layoutLinkFocus('c', ['i1', 'i2'], ['o1', 'o2', 'o3'], sizeOf, anchor)
+    expect(positions.get('c')).toEqual(anchor)
+    for (const id of ['i1', 'i2']) expect(positions.get(id)!.x + size.width).toBeLessThan(anchor.x)
+    for (const id of ['o1', 'o2', 'o3']) expect(positions.get(id)!.x).toBeGreaterThan(anchor.x + size.width)
+  })
+
+  it('places every frame without overlaps', () => {
+    const placed = allPlaced(layoutLinkFocus('c', ids('i', 7), ids('o', 30), sizeOf, anchor).positions)
+    expect(placed).toHaveLength(38)
+    for (let i = 0; i < placed.length; i++) {
+      for (let j = i + 1; j < placed.length; j++) expect(overlaps(placed[i], placed[j])).toBe(false)
+    }
+  })
+
+  it('wraps many links into several columns, nearest the page first', () => {
+    const { positions, bounds } = layoutLinkFocus('c', [], ids('o', 60), sizeOf, anchor)
+    const xs = [...new Set(ids('o', 60).map((id) => positions.get(id)!.x))].sort((a, b) => a - b)
+    expect(xs.length).toBeGreaterThan(3)
+    expect(positions.get('o0')!.x).toBe(xs[0])
+    expect(bounds.width / bounds.height).toBeGreaterThan(0.8)
+    expect(bounds.width / bounds.height).toBeLessThan(3)
+  })
+
+  it('centres each side on the page, and the bounds on the page with labels included', () => {
+    const { positions, bounds } = layoutLinkFocus('c', ['i0'], ids('o', 9), sizeOf, anchor)
+    expect(positions.get('i0')!.y).toBe(anchor.y)
+    expect(bounds.y).toBeLessThan(anchor.y - 90)
+    expect(bounds.x + bounds.width / 2).toBe(anchor.x + size.width / 2)
+    for (const p of allPlaced(positions)) {
+      expect(p.x).toBeGreaterThanOrEqual(bounds.x)
+      expect(p.x + size.width).toBeLessThanOrEqual(bounds.x + bounds.width)
+    }
+  })
+
+  it('handles a page without links', () => {
+    const { positions, bounds } = layoutLinkFocus('c', [], [], sizeOf, anchor)
+    expect([...positions.keys()]).toEqual(['c'])
+    expect(bounds.width).toBe(size.width)
   })
 })

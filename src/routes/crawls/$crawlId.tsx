@@ -5,6 +5,7 @@ import { ReactFlowProvider } from '@xyflow/react'
 import { ArrowLeft, LayoutGrid, Network, PanelLeft, Play, RotateCw, Square } from 'lucide-react'
 import { toast } from 'sonner'
 import { CrawlName } from '#/components/CrawlName'
+import { ProgressBar, QueueSheet } from '#/components/QueueSheet'
 import { RunnerStatus } from '#/components/RunnerStatus'
 import { StatusBadge } from '#/components/StatusBadge'
 import { ThemeToggle } from '#/components/ThemeToggle'
@@ -17,6 +18,7 @@ import { Button } from '#/components/ui/button'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '#/components/ui/resizable'
 import { analyzeLinks } from '#/lib/linkHealth'
 import { crawlQuery, crawlTitle, isActive } from '#/lib/queries'
+import { countPages } from '#/lib/schemas'
 import { foldSlashVariants, groupSlashVariants, healthPages } from '#/lib/slashVariants'
 import { VIEWPORTS, VIEWPORT_IDS, type ViewportId } from '#/lib/viewports'
 import { cancelCrawl, refetchBranch, refetchCrawl, resumeCrawl } from '#/server/functions/crawls'
@@ -183,16 +185,18 @@ function CrawlPage() {
 
   const previewOpen = !!previewPageId && board.frames.has(previewPageId)
 
-  const done = pages.filter((p) => p.status === 'done' || p.status === 'failed').length
-  const failed = pages.filter((p) => p.status === 'failed').length
-  const interrupted = pages.filter((p) => p.status === 'cancelled').length
+  const counts = useMemo(() => countPages(pages), [pages])
+  const done = counts.done + counts.failed
+  const failed = counts.failed
+  const interrupted = counts.cancelled
   const root = pages.find((p) => p.depth === 0)
   const active = isActive(crawl.status)
   const canResume = !active && (interrupted > 0 || root?.status === 'failed')
 
   return (
     <div className="flex h-screen flex-col">
-      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-card px-4 py-2.5">
+      <header className="relative flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-card px-4 py-2.5">
+        {active && <ProgressBar counts={counts} className="absolute inset-x-0 -bottom-px h-0.5" />}
         <Button variant="ghost" size="icon" asChild aria-label="Back">
           <Link to="/">
             <ArrowLeft />
@@ -242,6 +246,7 @@ function CrawlPage() {
               Resume
             </Button>
           )}
+          {active && <QueueSheet crawlId={crawlId} counts={counts} onPick={pickPage} />}
           {active && (
             <Button
               variant="destructive"
@@ -331,7 +336,7 @@ function CrawlPage() {
                       size="icon-sm"
                       aria-pressed={showLinks}
                       aria-label="Links"
-                      title="Show links of the selected page, or every link when nothing is selected"
+                      title="Links: lay out the selected page between the pages linking to it and the pages it links to, or show every link when nothing is selected"
                       onClick={() => setShowLinks((v) => !v)}
                     >
                       <Network />
@@ -370,6 +375,7 @@ function CrawlPage() {
                     health={health}
                     slashConflicts={groups.conflicts}
                     showLinks={showLinks}
+                    aspect={boardAspect}
                     layoutVersion={layoutVersion}
                     selectedPageId={selectedPageId}
                     previewPageId={previewOpen ? previewPageId : null}

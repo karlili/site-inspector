@@ -1,9 +1,9 @@
 import { queryOptions } from '@tanstack/react-query'
-import { getCrawl, listCrawls, listRunners } from '#/server/functions/crawls'
+import { getCrawl, getQueue, listCrawls, listRunners } from '#/server/functions/crawls'
 import { getSettings } from '#/server/functions/settings'
-import type { CrawlStatus } from './schemas'
+import { isActive } from './schemas'
 
-export const isActive = (status: CrawlStatus) => status === 'queued' || status === 'running'
+export { isActive }
 
 /** What a crawl is called everywhere it's shown. */
 export const crawlTitle = (crawl: { name: string | null; rootUrl: string }) =>
@@ -26,6 +26,16 @@ export const crawlQuery = (crawlId: string) =>
       return status && isActive(status) ? 2000 : false
     },
   })
+
+/** What runners are capturing and what's waiting, for every active crawl or just one. */
+export const queueQuery = (crawlId?: string) =>
+  queryOptions({
+    queryKey: ['queue', crawlId ?? 'all'],
+    queryFn: () => getQueue({ data: { crawlId } }),
+    refetchInterval: 2000,
+  })
+
+export type CrawlQueue = Awaited<ReturnType<typeof getQueue>>[number]
 
 export const runnersQuery = () =>
   queryOptions({

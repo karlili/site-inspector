@@ -282,6 +282,40 @@ async function drain(linksOf: Record<string, string[]> = {}) {
   return captured
 }
 
+describe('queue listing', () => {
+  it('lists running and waiting pages in claim order, oldest crawl first', async () => {
+    const first = await newCrawl({ maxDepth: 2 })
+    await finishRoot('r', [url('/a'), url('/b'), url('/c')])
+    const a = (await jobs.claimNextPage(db, 'r'))!
+    // /a links on to level 2, which waits until /b and /c are captured.
+    expect(await jobs.completePage(db, 'r', a, result([url('/a/1')]))).toBe(true)
+    const b = (await jobs.claimNextPage(db, 'r'))!
+    const second = await newCrawl()
+
+    const queues = await jobs.listQueue(db)
+    expect(queues.map((q) => q.crawl.id)).toEqual([first, second])
+    const [q] = queues
+    expect(q.counts).toEqual({ pending: 2, running: 1, done: 2, failed: 0, cancelled: 0 })
+    expect(q.level).toBe(1)
+    expect(q.running.map((p) => p.id)).toEqual([b.page.id])
+    expect(q.waiting.map((p) => [new URL(p.url).pathname, p.depth])).toEqual([
+      ['/c', 1],
+      ['/a/1', 2],
+    ])
+    expect(queues[1].waiting.map((p) => p.depth)).toEqual([0])
+
+    expect((await jobs.listQueue(db, { crawlId: second })).map((q) => q.crawl.id)).toEqual([second])
+    expect((await jobs.listQueue(db, { crawlId: first, limit: 1 }))[0].waiting).toHaveLength(1)
+  })
+
+  it('leaves out crawls that are no longer active', async () => {
+    const crawlId = await newCrawl()
+    await jobs.cancelCrawl(db, crawlId)
+    expect(await jobs.listQueue(db)).toEqual([])
+    expect((await jobs.countCrawlPages(db, [crawlId])).get(crawlId)).toMatchObject({ cancelled: 1 })
+  })
+})
+
 describe('refetch, go deeper and resume', () => {
   it('refetches a page of a finished crawl, replacing its links', async () => {
     const crawlId = await newCrawl({ maxDepth: 1 })

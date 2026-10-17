@@ -4,18 +4,22 @@ import {
   crawlIdSchema,
   crawlInputSchema,
   expandPageSchema,
+  isActive,
   pageBranchSchema,
   pageRefSchema,
+  queueSchema,
   renameCrawlSchema,
 } from '#/lib/schemas'
 import { db } from '../db/client'
 import { crawls, links, pages, screenshots } from '../db/schema'
 import {
   cancelCrawl as cancelCrawlJobs,
+  countCrawlPages,
   createCrawl,
   deleteCrawl as deleteCrawlJobs,
   expandPage as expandPageJobs,
   listOnlineRunners,
+  listQueue,
   refetchBranch as refetchBranchJobs,
   refetchCrawl as refetchCrawlJobs,
   refetchPage as refetchPageJobs,
@@ -54,7 +58,13 @@ export const renameCrawl = createServerFn({ method: 'POST' })
   })
 
 export const listCrawls = createServerFn({ method: 'GET' }).handler(async () => {
-  return db.select().from(crawls).orderBy(desc(crawls.createdAt), desc(crawls.seq))
+  const rows = await db.select().from(crawls).orderBy(desc(crawls.createdAt), desc(crawls.seq))
+  // Progress only matters while runners are still working through a crawl.
+  const counts = await countCrawlPages(
+    db,
+    rows.filter((c) => isActive(c.status)).map((c) => c.id),
+  )
+  return rows.map((crawl) => ({ ...crawl, progress: counts.get(crawl.id) ?? null }))
 })
 
 export const getCrawl = createServerFn({ method: 'GET' })
@@ -122,6 +132,10 @@ export const deleteCrawl = createServerFn({ method: 'POST' })
       .catch((err) => console.error(`Couldn't delete the screenshots of crawl ${data.crawlId}:`, err))
     return { ok: true }
   })
+
+export const getQueue = createServerFn({ method: 'GET' })
+  .validator(queueSchema)
+  .handler(async ({ data }) => listQueue(db, { crawlId: data.crawlId }))
 
 export const listRunners = createServerFn({ method: 'GET' }).handler(async () => {
   return (await listOnlineRunners(db)).map(({ id, hostname, concurrency, activeJobs }) => ({
