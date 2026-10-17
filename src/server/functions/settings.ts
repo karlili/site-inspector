@@ -11,6 +11,6 @@ export const saveSettings = createServerFn({ method: 'POST' })
   .validator(runnerSettingsSchema)
   .handler(async ({ data }) => {
     // Runners read these from the database: on every claim, and their slot count on each heartbeat.
-    saveRunnerSettings(db, data)
+    await saveRunnerSettings(db, data)
     return data
   })

@@ -1,25 +1,34 @@
-import { relations, sql } from 'drizzle-orm'
+import { relations } from 'drizzle-orm'
 import {
+  bigint,
+  boolean,
+  doublePrecision,
   index,
   integer,
-  real,
-  sqliteTable,
+  jsonb,
+  pgTable,
   text,
+  timestamp,
   uniqueIndex,
-} from 'drizzle-orm/sqlite-core'
+} from 'drizzle-orm/pg-core'
 import { crawlStatuses, pageSources, pageStatuses } from '#/lib/schemas'
 import type { ViewportId } from '#/lib/viewports'
 
-export const crawls = sqliteTable('crawls', {
+const timestampMs = (name: string) => timestamp(name, { withTimezone: true, precision: 3 })
+/** Insertion order, for breaking ties between rows created at the same moment. */
+const seq = () => bigint({ mode: 'number' }).generatedAlwaysAsIdentity().notNull()
+
+export const crawls = pgTable('crawls', {
   id: text().primaryKey(),
+  seq: seq(),
   /** Set by the user; null shows the crawl by its start URL. */
   name: text(),
   rootUrl: text('root_url').notNull(),
   hostname: text().notNull(),
   maxDepth: integer('max_depth').notNull(),
   maxPages: integer('max_pages').notNull(),
-  viewports: text({ mode: 'json' }).$type<ViewportId[]>().notNull(),
-  respectRobots: integer('respect_robots', { mode: 'boolean' }).notNull(),
+  viewports: jsonb().$type<ViewportId[]>().notNull(),
+  respectRobots: boolean('respect_robots').notNull(),
   status: text({ enum: crawlStatuses }).notNull().default('queued'),
   error: text(),
   pageCount: integer('page_count').notNull().default(0),
@@ -28,19 +37,18 @@ export const crawls = sqliteTable('crawls', {
   /** The robots.txt Crawl-delay, if it set one. */
   crawlDelayMs: integer('crawl_delay_ms'),
   /** Same-site page URLs the site's sitemap.xml lists, fetched by the root page's job. */
-  sitemapUrls: text('sitemap_urls', { mode: 'json' }).$type<string[]>(),
+  sitemapUrls: jsonb('sitemap_urls').$type<string[]>(),
   /** The earliest a runner may start loading this crawl's next page. */
-  nextFetchAt: integer('next_fetch_at', { mode: 'timestamp_ms' }),
-  createdAt: integer('created_at', { mode: 'timestamp' })
-    .notNull()
-    .default(sql`(unixepoch())`),
-  finishedAt: integer('finished_at', { mode: 'timestamp' }),
+  nextFetchAt: timestampMs('next_fetch_at'),
+  createdAt: timestampMs('created_at').notNull().defaultNow(),
+  finishedAt: timestampMs('finished_at'),
 })
 
-export const pages = sqliteTable(
+export const pages = pgTable(
   'pages',
   {
     id: text().primaryKey(),
+    seq: seq(),
     crawlId: text('crawl_id')
       .notNull()
       .references(() => crawls.id, { onDelete: 'cascade' }),
@@ -53,14 +61,14 @@ export const pages = sqliteTable(
     error: text(),
     /** The other site this page redirected to; its screenshots show that page. */
     redirectUrl: text('redirect_url'),
-    posX: real('pos_x'),
-    posY: real('pos_y'),
+    posX: doublePrecision('pos_x'),
+    posY: doublePrecision('pos_y'),
     /** Each page is a job: the runner holding it and until when its lease is valid. */
     claimedBy: text('claimed_by'),
-    leaseExpiresAt: integer('lease_expires_at', { mode: 'timestamp_ms' }),
+    leaseExpiresAt: timestampMs('lease_expires_at'),
     attempts: integer().notNull().default(0),
     /** Every same-site URL the page linked to, kept even when its children weren't enqueued. */
-    outlinks: text({ mode: 'json' }).$type<string[]>(),
+    outlinks: jsonb().$type<string[]>(),
     /** Set by "go deeper": how deep this page's branch may go, instead of the crawl's max depth. */
     expandToDepth: integer('expand_to_depth'),
     source: text({ enum: pageSources }).notNull().default('link'),
@@ -69,10 +77,11 @@ export const pages = sqliteTable(
     uniqueIndex('pages_crawl_url_idx').on(t.crawlId, t.url),
     index('pages_crawl_idx').on(t.crawlId),
     index('pages_queue_idx').on(t.status, t.crawlId, t.depth),
+    index('pages_parent_idx').on(t.parentPageId),
   ],
 )
 
-export const links = sqliteTable(
+export const links = pgTable(
   'links',
   {
     crawlId: text('crawl_id')
@@ -86,7 +95,7 @@ export const links = sqliteTable(
   ],
 )
 
-export const screenshots = sqliteTable(
+export const screenshots = pgTable(
   'screenshots',
   {
     id: text().primaryKey(),
@@ -99,28 +108,32 @@ export const screenshots = sqliteTable(
     viewport: text().$type<ViewportId>().notNull(),
     width: integer().notNull(),
     height: integer().notNull(),
+    /** Storage keys (see server/storage), relative to the screenshot store's root. */
     filePath: text('file_path').notNull(),
     thumbPath: text('thumb_path').notNull(),
   },
-  (t) => [index('screenshots_page_idx').on(t.pageId)],
+  (t) => [
+    index('screenshots_page_idx').on(t.pageId),
+    index('screenshots_crawl_idx').on(t.crawlId),
+  ],
 )
 
 /** Runner processes, so the admin can tell whether anything is picking up work. */
-export const runners = sqliteTable('runners', {
+export const runners = pgTable('runners', {
   id: text().primaryKey(),
   hostname: text().notNull(),
   pid: integer().notNull(),
   concurrency: integer().notNull(),
   activeJobs: integer('active_jobs').notNull().default(0),
-  startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
-  lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+  startedAt: timestampMs('started_at').notNull(),
+  lastSeenAt: timestampMs('last_seen_at').notNull(),
 })
 
 /** Admin-editable settings, one JSON value per key (e.g. 'runner'). */
-export const settings = sqliteTable('settings', {
+export const settings = pgTable('settings', {
   key: text().primaryKey(),
-  value: text({ mode: 'json' }).notNull(),
-  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  value: jsonb().notNull(),
+  updatedAt: timestampMs('updated_at').notNull(),
 })
 
 export const crawlsRelations = relations(crawls, ({ many }) => ({

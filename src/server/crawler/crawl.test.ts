@@ -6,11 +6,23 @@ import type { AddressInfo } from 'node:net'
 import sharp from 'sharp'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MAX_FRAME_HEIGHT, VIEWPORTS, previewPath, type ViewportId } from '#/lib/viewports'
+import { createTestDatabase } from '../db/testing'
+import { LocalStore } from '../storage/local'
 
 // Isolate the database and screenshots from the dev data directory.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'site-inspector-test-'))
 process.env.DATA_DIR = tmp
-process.env.DATABASE_URL = path.join(tmp, 'test.db')
+process.env.STORAGE_DRIVER = 'local'
+delete process.env.SCREENSHOT_DIR
+const dropDatabase = await createTestDatabase()
+const { db, openDb, closeDb } = await import('../db/client')
+/** Pools opened for runners, closed with the main one before the database is dropped. */
+const pools: ReturnType<typeof openDb>[] = []
+const openPool = () => {
+  const pool = openDb()
+  pools.push(pool)
+  return pool
+}
 
 const html = (title: string, body: string, viewport = 'width=device-width, initial-scale=1') =>
   `<!doctype html><html><head><meta name="viewport" content="${viewport}"><title>${title}</title></head><body style="height:1600px"><h1>${title}</h1>${body}</body></html>`
@@ -73,20 +85,21 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
 })
 
-afterAll(() => {
+afterAll(async () => {
   server.close()
+  await Promise.all([db, ...pools].map(closeDb))
+  await dropDatabase()
   fs.rmSync(tmp, { recursive: true, force: true })
 })
 
 async function crawlSite(maxDepth: number, viewports: ('mobile' | 'desktop')[]) {
-  const { db, openDb } = await import('../db/client')
   const { createCrawl } = await import('./jobs')
   const { saveRunnerSettings } = await import('./settings')
   const { DEFAULT_RUNNER_SETTINGS } = await import('#/lib/schemas')
   const { Runner } = await import('#/runner/runner')
   const { getCrawl } = await loadDetail()
-  saveRunnerSettings(db, { ...DEFAULT_RUNNER_SETTINGS, fetchDelayMs: 0 })
-  const id = createCrawl(db, {
+  await saveRunnerSettings(db, { ...DEFAULT_RUNNER_SETTINGS, fetchDelayMs: 0 })
+  const id = await createCrawl(db, {
     rootUrl: `${baseUrl}/`,
     maxDepth,
     maxPages: 50,
@@ -96,12 +109,12 @@ async function crawlSite(maxDepth: number, viewports: ('mobile' | 'desktop')[]) 
   // Two single-slot runners, each with its own connection like separate processes:
   // while one captures a page the other must pick up its sibling.
   const runners = [0, 1].map(
-    (i) => new Runner({ db: openDb(), id: `runner-${i}`, concurrency: 1, pollMs: 50 }),
+    (i) => new Runner({ db: openPool(), id: `runner-${i}`, concurrency: 1, pollMs: 50 }),
   )
   await Promise.all(runners.map((r) => r.start()))
   try {
     await expect
-      .poll(() => getCrawl(id).crawl.status, { timeout: 90_000, interval: 100 })
+      .poll(async () => (await getCrawl(id)).crawl.status, { timeout: 90_000, interval: 100 })
       .not.toMatch(/queued|running/)
   } finally {
     await Promise.all(runners.map((r) => r.stop()))
@@ -110,15 +123,14 @@ async function crawlSite(maxDepth: number, viewports: ('mobile' | 'desktop')[]) 
 }
 
 async function loadDetail() {
-  const { db } = await import('../db/client')
   const { crawls, links, pages, screenshots } = await import('../db/schema')
   const { eq } = await import('drizzle-orm')
   return {
-    getCrawl: (id: string) => ({
-      crawl: db.select().from(crawls).where(eq(crawls.id, id)).get()!,
-      pages: db.select().from(pages).where(eq(pages.crawlId, id)).all(),
-      screenshots: db.select().from(screenshots).where(eq(screenshots.crawlId, id)).all(),
-      links: db.select().from(links).where(eq(links.crawlId, id)).all(),
+    getCrawl: async (id: string) => ({
+      crawl: (await db.select().from(crawls).where(eq(crawls.id, id)))[0],
+      pages: await db.select().from(pages).where(eq(pages.crawlId, id)),
+      screenshots: await db.select().from(screenshots).where(eq(screenshots.crawlId, id)),
+      links: await db.select().from(links).where(eq(links.crawlId, id)),
     }),
   }
 }
@@ -186,22 +198,21 @@ describe('runCrawl', () => {
 
 describe('runner slots', () => {
   it('follows the slots-per-runner setting while running', async () => {
-    const { db, openDb } = await import('../db/client')
     const { listOnlineRunners } = await import('./jobs')
     const { saveRunnerSettings } = await import('./settings')
     const { DEFAULT_RUNNER_SETTINGS } = await import('#/lib/schemas')
     const { Runner } = await import('#/runner/runner')
-    const slots = () => listOnlineRunners(db).find((r) => r.id === 'resizing')?.concurrency
+    const slots = async () => (await listOnlineRunners(db)).find((r) => r.id === 'resizing')?.concurrency
 
-    saveRunnerSettings(db, { ...DEFAULT_RUNNER_SETTINGS, slotsPerRunner: 2 })
-    const runner = new Runner({ db: openDb(), id: 'resizing', pollMs: 50, heartbeatMs: 50 })
+    await saveRunnerSettings(db, { ...DEFAULT_RUNNER_SETTINGS, slotsPerRunner: 2 })
+    const runner = new Runner({ db: openPool(), id: 'resizing', pollMs: 50, heartbeatMs: 50 })
     await runner.start()
     try {
       expect(runner.concurrency).toBe(2)
-      expect(slots()).toBe(2)
-      saveRunnerSettings(db, { ...DEFAULT_RUNNER_SETTINGS, slotsPerRunner: 4 })
+      expect(await slots()).toBe(2)
+      await saveRunnerSettings(db, { ...DEFAULT_RUNNER_SETTINGS, slotsPerRunner: 4 })
       await expect.poll(slots, { timeout: 5000, interval: 50 }).toBe(4)
-      saveRunnerSettings(db, { ...DEFAULT_RUNNER_SETTINGS, slotsPerRunner: 1 })
+      await saveRunnerSettings(db, { ...DEFAULT_RUNNER_SETTINGS, slotsPerRunner: 1 })
       await expect.poll(slots, { timeout: 5000, interval: 50 }).toBe(1)
     } finally {
       await runner.stop()
@@ -225,7 +236,7 @@ describe('device emulation', () => {
           pixelRatio: window.devicePixelRatio,
         }))
         const name = `${viewport}${pathname.replace('/', '-')}`
-        const shot = await captureScreenshot(page, viewport, path.join(tmp, 'screenshots'), 'devices', name)
+        const shot = await captureScreenshot(page, viewport, new LocalStore(path.join(tmp, 'screenshots')), 'devices', name)
         const image = await sharp(path.join(tmp, 'screenshots', shot.filePath)).metadata()
         return { seen, shot, image }
       } finally {
@@ -280,7 +291,7 @@ describe('off-site redirects', () => {
         userAgent,
         crawl: { id: 'redirects', hostname: '127.0.0.1', viewports: ['desktop'], respectRobots: false } as Options['crawl'],
         page: { id: `away-${depth}`, url: `${baseUrl}/away`, depth } as Options['page'],
-        screenshotDir: path.join(tmp, 'screenshots'),
+        store: new LocalStore(path.join(tmp, 'screenshots')),
       })
     try {
       const result = await capture(1)

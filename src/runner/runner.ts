@@ -1,7 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import fs from 'node:fs/promises'
 import os from 'node:os'
-import path from 'node:path'
 import type { Browser } from 'playwright'
 import type { Db } from '#/server/db/client'
 import { CrawlCancelled, capturePage, errorMessage, launchBrowser } from '#/server/crawler/crawl'
@@ -17,14 +15,15 @@ import {
 } from '#/server/crawler/jobs'
 import { parseRobots, type RobotsRules } from '#/server/crawler/robots'
 import { getRunnerSettings } from '#/server/crawler/settings'
-import { SCREENSHOT_DIR } from '#/server/paths'
+import { screenshotStore, type ScreenshotStore } from '#/server/storage'
 
 export interface RunnerOptions {
   db: Db
   id?: string
   /** Pages this runner captures at once. Unset: follow the slots-per-runner setting. */
   concurrency?: number
-  screenshotDir?: string
+  /** Where captures are saved; defaults to the store the environment configures. */
+  store?: ScreenshotStore
   /** How long an idle slot waits before looking for work again. */
   pollMs?: number
   heartbeatMs?: number
@@ -33,7 +32,7 @@ export interface RunnerOptions {
 
 /**
  * Captures pages from the shared queue until stopped. Independent of the admin
- * server: start as many as you like against the same data directory.
+ * server: start as many as you like against the same database and screenshot store.
  */
 export class Runner {
   readonly id: string
@@ -41,7 +40,7 @@ export class Runner {
   /** Set when the slot count was given explicitly rather than taken from settings. */
   private readonly pinnedConcurrency?: number
   private targetConcurrency = 0
-  private readonly screenshotDir: string
+  private readonly store: ScreenshotStore
   private readonly pollMs: number
   private readonly heartbeatMs: number
   private readonly log: (message: string) => void
@@ -52,13 +51,14 @@ export class Runner {
   private readonly sleepers = new Set<() => void>()
   private readonly slots = new Map<number, Promise<void>>()
   private heartbeatTimer?: NodeJS.Timeout
+  private beating?: Promise<void>
   private stopping = false
 
   constructor(options: RunnerOptions) {
     this.db = options.db
     this.id = options.id ?? `${os.hostname()}-${process.pid}-${randomUUID().slice(0, 8)}`
     this.pinnedConcurrency = options.concurrency
-    this.screenshotDir = options.screenshotDir ?? SCREENSHOT_DIR
+    this.store = options.store ?? screenshotStore()
     this.pollMs = options.pollMs ?? 1000
     this.heartbeatMs = options.heartbeatMs ?? 15_000
     this.log = options.log ?? (() => {})
@@ -70,16 +70,16 @@ export class Runner {
   }
 
   async start() {
-    this.targetConcurrency = this.pinnedConcurrency ?? getRunnerSettings(this.db).slotsPerRunner
-    registerRunner(this.db, {
+    this.targetConcurrency = this.pinnedConcurrency ?? (await getRunnerSettings(this.db)).slotsPerRunner
+    await registerRunner(this.db, {
       id: this.id,
       hostname: os.hostname(),
       pid: process.pid,
       concurrency: this.concurrency,
     })
     await this.getBrowser()
-    this.beat()
-    this.heartbeatTimer = setInterval(() => this.beat(), this.heartbeatMs)
+    await this.beat()
+    this.heartbeatTimer = setInterval(() => void this.beat(), this.heartbeatMs)
     this.resize(this.targetConcurrency)
   }
 
@@ -89,22 +89,29 @@ export class Runner {
     for (const wake of this.sleepers) wake()
     await Promise.all(this.slots.values())
     clearInterval(this.heartbeatTimer)
-    removeRunner(this.db, this.id)
+    await this.beating
+    await removeRunner(this.db, this.id).catch((err) => this.log(`unregister failed: ${errorMessage(err)}`))
     const browser = await this.browser?.catch(() => undefined)
     await browser?.browser.close().catch(() => {})
   }
 
+  /** Skips a beat while the previous one is still running (e.g. the database is slow). */
   private beat() {
+    this.beating ??= this.doBeat().finally(() => (this.beating = undefined))
+    return this.beating
+  }
+
+  private async doBeat() {
     try {
       if (this.pinnedConcurrency === undefined) {
-        const { slotsPerRunner } = getRunnerSettings(this.db)
+        const { slotsPerRunner } = await getRunnerSettings(this.db)
         if (slotsPerRunner !== this.targetConcurrency) {
           this.log(`slots ${this.targetConcurrency} -> ${slotsPerRunner}`)
           this.resize(slotsPerRunner)
         }
       }
-      reapExpiredLeases(this.db)
-      heartbeat(this.db, this.id, [...this.active], Date.now(), this.concurrency)
+      await reapExpiredLeases(this.db)
+      await heartbeat(this.db, this.id, [...this.active], Date.now(), this.concurrency)
     } catch (err) {
       this.log(`heartbeat failed: ${errorMessage(err)}`)
     }
@@ -126,7 +133,7 @@ export class Runner {
     while (!this.stopping && index < this.targetConcurrency) {
       let job: ClaimedJob | null = null
       try {
-        job = claimNextPage(this.db, this.id)
+        job = await claimNextPage(this.db, this.id)
       } catch (err) {
         this.log(`claim failed: ${errorMessage(err)}`)
       }
@@ -159,18 +166,18 @@ export class Runner {
         crawl,
         page,
         robots: page.depth === 0 ? undefined : this.robotsFor(job),
-        screenshotDir: this.screenshotDir,
+        store: this.store,
         captureId,
         navTimeoutMs: job.settings.navTimeoutMs,
-        isCancelled: () => !isCrawlActive(this.db, crawl.id),
+        isCancelled: async () => !(await isCrawlActive(this.db, crawl.id)),
       })
-      kept = completePage(this.db, this.id, job, result)
+      kept = await completePage(this.db, this.id, job, result)
       this.log(`${result.error ? 'failed' : 'done'} ${page.url}${result.error ? `: ${result.error}` : ''}`)
     } catch (err) {
       if (!(err instanceof CrawlCancelled)) {
         // Something broke outside the page itself (e.g. the browser crashed).
         this.log(`error on ${page.url}: ${errorMessage(err)}`)
-        kept = completePage(this.db, this.id, job, {
+        kept = await completePage(this.db, this.id, job, {
           httpStatus: null,
           title: null,
           error: errorMessage(err),
@@ -211,13 +218,14 @@ export class Runner {
 
   /** Delete the page's capture files that `remove` picks. */
   private async removeCaptures({ page, crawl }: ClaimedJob, remove: (file: string) => boolean) {
-    const dir = path.join(this.screenshotDir, crawl.id)
-    const files = await fs.readdir(dir).catch(() => [] as string[])
-    await Promise.all(
-      files
-        .filter((f) => f.startsWith(`${page.id}-`) && remove(f))
-        .map((f) => fs.rm(path.join(dir, f), { force: true })),
-    )
+    const dir = `${crawl.id}/`
+    try {
+      const keys = await this.store.list(`${dir}${page.id}-`)
+      await this.store.delete(keys.filter((key) => remove(key.slice(dir.length))))
+    } catch (err) {
+      // Leftover files only cost space; the page's screenshot rows are what count.
+      this.log(`couldn't remove old captures of ${page.url}: ${errorMessage(err)}`)
+    }
   }
 
   private sleep(ms: number) {

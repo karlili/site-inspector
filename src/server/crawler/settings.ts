@@ -6,16 +6,16 @@ import { settings } from '../db/schema'
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0]
 
 /** The saved runner settings, with defaults for anything missing or no longer valid. */
-export function getRunnerSettings(db: Db | Tx): RunnerSettings {
-  const row = db.select().from(settings).where(eq(settings.key, 'runner')).get()
+export async function getRunnerSettings(db: Db | Tx): Promise<RunnerSettings> {
+  const [row] = await db.select().from(settings).where(eq(settings.key, 'runner'))
   const parsed = runnerSettingsSchema.safeParse(row?.value ?? {})
   return parsed.success ? parsed.data : DEFAULT_RUNNER_SETTINGS
 }
 
-export function saveRunnerSettings(db: Db, value: RunnerSettings) {
+export async function saveRunnerSettings(db: Db, value: RunnerSettings) {
   const now = new Date()
-  db.insert(settings)
+  await db
+    .insert(settings)
     .values({ key: 'runner', value, updatedAt: now })
     .onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: now } })
-    .run()
 }

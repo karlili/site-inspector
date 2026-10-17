@@ -8,7 +8,7 @@ import {
 } from 'playwright'
 import { VIEWPORTS, type ViewportId } from '#/lib/viewports'
 import type { Crawl, Page as PageRow } from '../db/schema'
-import { SCREENSHOT_DIR } from '../paths'
+import { screenshotStore, type ScreenshotStore } from '../storage'
 import type { PageResult } from './jobs'
 import { fetchRobotsText, parseRobots, type RobotsRules } from './robots'
 import { captureScreenshot } from './screenshot'
@@ -35,7 +35,8 @@ export interface CaptureOptions {
   page: PageRow
   /** Rules from the crawl's robots.txt; the root page fetches its own. */
   robots?: RobotsRules
-  screenshotDir?: string
+  /** Where captures are saved; defaults to the store the environment configures. */
+  store?: ScreenshotStore
   /**
    * Part of every file name this capture writes (`<page id>-<capture id>-<viewport>`),
    * so recapturing a page never overwrites the files its current screenshots point at.
@@ -44,7 +45,7 @@ export interface CaptureOptions {
   /** How long each page load may take. */
   navTimeoutMs?: number
   /** Checked between viewports; returning true throws CrawlCancelled. */
-  isCancelled?: () => boolean
+  isCancelled?: () => boolean | Promise<boolean>
 }
 
 /**
@@ -58,7 +59,7 @@ export async function capturePage({
   crawl,
   page: item,
   robots,
-  screenshotDir = SCREENSHOT_DIR,
+  store = screenshotStore(),
   captureId = randomUUID().slice(0, 8),
   navTimeoutMs = 30_000,
   isCancelled = () => false,
@@ -79,7 +80,7 @@ export async function capturePage({
 
   try {
     for (const viewport of crawl.viewports) {
-      if (isCancelled()) throw new CrawlCancelled()
+      if (await isCancelled()) throw new CrawlCancelled()
       const context = await browser.newContext({
         ...deviceOptions(viewport, userAgent),
         ignoreHTTPSErrors: true,
@@ -137,7 +138,7 @@ export async function capturePage({
           }
         }
 
-        const shot = await captureScreenshot(page, viewport, screenshotDir, crawl.id, `${item.id}-${captureId}`)
+        const shot = await captureScreenshot(page, viewport, store, crawl.id, `${item.id}-${captureId}`)
         result.screenshots.push({ viewport, ...shot })
       } finally {
         await context.close().catch(() => {})
